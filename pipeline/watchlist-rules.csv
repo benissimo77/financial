@@ -1,0 +1,28 @@
+action,level,value,list
+# include works at sector, industry or ticker level; exclude only at ticker level.
+# Run the "Build the Watchlist from Rules" cell in yfinance-Scraper.ipynb to regenerate watchlist.csv.
+# The optional fourth column names a sub-list. A ticker can be in several lists: give it one line per list.
+# Use a list with Watchlist().members('holdings'); see them all with Watchlist().lists().
+include,industry,Information Technology Services
+include,industry,Semiconductors
+include,industry,Computer Software
+include,ticker,SPY
+# Stocks actually held (DeGiro), so analysis can be run on the real portfolio.
+include,ticker,AAPL,holdings
+include,ticker,AMZN,holdings
+include,ticker,BABA,holdings
+include,ticker,BLDR,holdings
+include,ticker,GOOGL,holdings
+include,ticker,MA,holdings
+include,ticker,META,holdings
+include,ticker,MNST,holdings
+include,ticker,MSFT,holdings
+include,ticker,NFLX,holdings
+include,ticker,NVDA,holdings
+include,ticker,QCOM,holdings
+include,ticker,UBER,holdings
+include,ticker,ULTA,holdings
+# Report in a currency other than USD (Taiwan dollars, euros), so their fundamentals cannot be compared directly.
+exclude,ticker,ASX
+exclude,ticker,UMC
+exclude,ticker,SAP
