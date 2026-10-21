@@ -19,7 +19,7 @@ Personal research workspace for equity analysis. A pipeline builds a local datab
 ## Environment
 
 - Windows, Python 3.14, packages in the **global** interpreter (`C:\Users\bensi\AppData\Local\Programs\Python\Python314`). No virtual environment by decision: if a `.venv/` appears (VS Code offers one), delete it, or VS Code picks it as the notebook kernel and nothing imports.
-- Tests: `python tests/run_all.py`. Plain scripts, no pytest; they use temporary files and mocked downloads and never touch real data. Every module except `Backtest` is covered. Run them before and after any change.
+- Tests: `python tests/run_all.py`. Plain scripts, no pytest; they use temporary files and mocked downloads and never touch real data. Every module is covered. Run them before and after any change.
 - **The working directory is always the project root**, because every module reads `data/...` relative to it. Notebooks in `pipeline/` and `research/` start with a setup cell that finds the root (the folder containing `pipeline/watchlist-rules.csv`), changes to it and puts it on `sys.path`.
 
 ## Layout
@@ -29,7 +29,7 @@ pipeline/   YF, Edgar, EdgarStatements, Watchlist, DataHealth, EdgarHealth
             Data Update.ipynb, Data Health.ipynb
             watchlist-rules.csv, edgar-tags.csv   (the only hand-edited inputs)
 data/       downloaded and generated files only; never mix code in
-root        PriceData, PriceIndicators, PairAnalytics, FundamentalData, FundamentalIndicators, Backtest
+root        PriceData, PriceIndicators, PairAnalytics, FundamentalData, FundamentalIndicators, Strategy, Backtest
 research/   one notebook per study, plus _template.ipynb
 tests/
 ```
@@ -47,6 +47,8 @@ pipeline/watchlist-rules.csv + data/registry/tickers.csv
           └─> Edgar.update() ─> data/edgar/raw/*.json
                  └─> EdgarStatements.build() (+ pipeline/edgar-tags.csv) ─> data/edgar/edgar-quarterly.csv, edgar-annual.csv
                         ─> EdgarHealth; FundamentalData ─> FundamentalIndicators
+
+Strategy (hold / top / weights, StrategyData) ─> Backtest ─> BacktestResult
 ```
 
 `YF` writes one thing back to the registry: the permanent `DELISTED` status.
@@ -108,7 +110,8 @@ Green = use as is; amber = needs attention; red = exclude from analysis. Score o
 | [PairAnalytics.py](PairAnalytics.py) | Two-column tables (ticker held, hedge): `cointegration_test`, `hedge_ratio`, `spread`, `zscore`, `generate_signals`. The default whole-history hedge ratio uses future prices and is for exploring only; pass `window`/`hedge_window` in a backtest. A pairs backtest must also size the two legs by the ratio. |
 | [FundamentalData.py](FundamentalData.py) | Statement loader: `get_data_wide(metric, period)`, `get_data_long(period)` with `period` = `quarterly`, `annual` or `ttm`; `as_of=` for point-in-time; `to_daily()`; `filers()`. Excludes red tickers and non-USD reporters by default (`include_red=True`, `currency=None`); quarterly and ttm views hold quarterly filers only. Wide tables are indexed by actual period end, so different fiscal calendars leave gaps. |
 | [FundamentalIndicators.py](FundamentalIndicators.py) | `revenue_growth`, `operating_margin`, `net_margin`, `fcf_margin`, `roic`, `fcf_yield`, each with `period` (`ttm` or `annual`), `tickers`, `as_of`, `daily`; `snapshot()`; `INDICATORS`. The reference implementation of the standard pattern. |
-| [Backtest.py](Backtest.py) | Pre-overhaul engine, untested and due to be replaced by a new harness. Known defects: constant weights are rebalanced daily at no cost, slippage is charged on returns not turnover, and a price gap loses the return across it. |
+| [Strategy.py](Strategy.py) | What a strategy author imports. A strategy is `function(data, **params)` returning `hold(signal)` (equal weights where true), `top(score, n)` (the n highest scores, equal weights) or `weights(table)` (exact, negative = short); a plain table is taken as weights. `data` (`StrategyData`) offers `prices` (adjusted), `close`, `volume`, `benchmark` (SPY), `universe`, `price_ind`, `fund_ind` (use `daily=True`) and `fundamental(metric, period)`, all on the trading-day calendar over the full history so indicators can warm up. Equal weights are shared only among tickers eligible that day. |
+| [Backtest.py](Backtest.py) | `Backtest(strategy, tickers=None, start='2010-01-01', end=None, rebalance='monthly', cost=0.001, **params).run()` returns a `BacktestResult` (`equity` from 1, `returns`, `holdings`, `turnover`, `costs`, `holdings_count`, `settings`). Targets are read on rebalance dates (first test day, then each period end) and traded at the next day's close; holdings drift between rebalances; cost = rate × value traded; a price gap keeps its return; a holding whose prices end is sold at its last price into cash (0% interest). `universe()`: watchlist tickers except SPY and red ones, eligible on a day if they have a price and passed the liquidity screen as of then (median dollar volume ≥ $10M and last close ≥ $2 over the preceding 60 days, at least 40 of them with data). Every run also carries `result.baselines`: 'Equal-weight universe' (every eligible ticker equally, same schedule and costs) and 'SPY' (bought at the strategy's first trade with the same cost, then held; omitted if SPY has no prices). `result.metrics()` is a snapshot, one row per run (strategy first): `total_return, annual_return, volatility, sharpe, worst_drawdown, longest_drawdown_days, turnover_per_year, cost_per_year, avg_holdings`, as fractions, per calendar year, Sharpe with cash at 0%. `result.tear_sheet()` shows the formatted metrics, `figure()` (growth of $1 on a log scale, drawdown, rolling one-year return), `calendar_returns()` with a strategy-minus-equal-weight column, `contributions()` (each ticker's summed daily contributions: relative importance, not additive to the total) and `caveats()` (period, costs, settings, the hindsight in the universe, a dominant single stock, few holdings). In a plain script it prints text instead of notebook output. Image export of the figure would need the `kaleido` package, which is not installed. |
 
 ## Notebooks
 
