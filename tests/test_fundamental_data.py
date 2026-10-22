@@ -76,3 +76,12 @@ for name, call in (('unknown metric', lambda: fd.get_data_wide('profit')), ('unk
 try: FundamentalData(data_dir=T + '/nowhere', health=health()); raised = None
 except Exception as e: raised = e
 ok('missing statement file raises, naming the file', isinstance(raised, FileNotFoundError) and 'edgar-quarterly.csv' in str(raised))
+
+# Without a health object the loader uses the scores saved by the last update
+health().save()
+saved_fd = FundamentalData(data_dir=T + '/EDGAR')
+ok('the loader reads saved health scores by default, with the same result', saved_fd.get_tickers('quarterly') == fd.get_tickers('quarterly')
+   and saved_fd.get_tickers('annual') == fd.get_tickers('annual'))
+try: FundamentalData(data_dir=T + '/EDGAR-empty' if os.makedirs(T + '/EDGAR-empty', exist_ok=True) else T + '/EDGAR-empty').filers(); raised = None
+except FileNotFoundError as e: raised = str(e)
+ok('without saved scores the loader says how to create them', raised is not None and ('Data Update' in raised or 'edgar-quarterly' in raised))

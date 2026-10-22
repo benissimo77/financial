@@ -65,3 +65,12 @@ with quiet(): mk().update(tickers=['GOOD'])
 m = man()
 ok('previous failure is retried without force, and new data replaces the file', m.at['GOOD', 'outcome'] == 'ok' and m.at['GOOD', 'last_filed'] == '2026-11-01' and open(T + '/EDGAR/raw/GOOD.json', 'rb').read() != before)
 ok('manifest still has one row per ticker', len(m) == 5 and m.index.is_unique)
+
+# An identical download leaves the stored file untouched, so the statement builder can skip it; a changed one replaces it.
+good = T + '/EDGAR/raw/GOOD.json'
+os.utime(good, (1_000_000_000, 1_000_000_000))                 # pretend it was written long ago
+with quiet(): mk().update(tickers=['GOOD'], force=True)        # same response as before
+ok('an identical download does not rewrite the file', os.path.getmtime(good) == 1_000_000_000 and man().at['GOOD', 'outcome'] == 'ok')
+mode['GOOD'] = Resp(200, facts(270, filed='2026-12-01'))
+with quiet(): mk().update(tickers=['GOOD'], force=True)
+ok('a changed download does', os.path.getmtime(good) > 1_000_000_000 and man().at['GOOD', 'last_filed'] == '2026-12-01')

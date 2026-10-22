@@ -65,3 +65,10 @@ grid = pd.DataFrame(hm.data[0].z, index=hm.data[0].y, columns=hm.data[0].x)
 ok('heatmap: missing quarter shows 0, annual filer blank between year ends', grid.loc['HOLE'].eq(0).sum() == 1 and grid.loc['FRGN'].notna().sum() == 5 and grid.loc['GOOD'].eq(100).all())
 ok('treemap leaves out not-applicable tickers', not any('ETF' in str(i) for i in t.data[0].ids) and any('LOST' in str(i) for i in t.data[0].ids))
 ok('nothing written', digest() == before and sorted(os.listdir(T + '/EDGAR')) == ['edgar-annual.csv', 'edgar-manifest.csv', 'edgar-quarterly.csv'])
+
+# Saved scores
+h.save(s)
+back = h.saved()
+ok('save() and saved() round-trip the scores', os.path.exists(T + '/EDGAR/edgar-health.csv') and back['band'].tolist() == s['band'].tolist())
+hi = h.heatmap(s, by='industry')
+ok('industry heatmap: one row per industry, with ticker counts', list(hi.data[0].y) == [f"Software ({(s['basis'] != 'none').sum()})"] and np.asarray(hi.data[0].z).shape[0] == 1)

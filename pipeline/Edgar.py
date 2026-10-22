@@ -79,7 +79,13 @@ class Edgar:
         if os.path.exists(path) and len(r.content) < self.MIN_SIZE_RATIO * os.path.getsize(path):
             print(f"  [SHRUNK]    {ticker}: download is {len(r.content)} bytes, stored file is {os.path.getsize(path)}; kept the stored file.")
             return 'shrunk', None
-        self._write_atomic(path, r.content)
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                unchanged = f.read() == r.content
+        else:
+            unchanged = False
+        if not unchanged:   # an identical download leaves the file untouched, so the statement builder can skip it
+            self._write_atomic(path, r.content)
         return 'ok', max(filed) if filed else None
 
     def update(self, tickers=None, force=False):

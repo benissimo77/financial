@@ -64,3 +64,31 @@ ok('a misspelt industry raises with a suggestion', raised is not None and 'Semic
 with contextlib.redirect_stdout(io.StringIO()) as out:
     got = rules("action,level,value\ninclude,ticker,NOPE1\ninclude,ticker,CHIP1\n", 'unknown.csv').resolve()
 ok('a ticker missing from the registry is skipped with a warning', list(got['ticker']) == ['CHIP1'] and 'NOPE1' in out.getvalue())
+
+# --- Sample rule: random, proportional to sector size, the same every time
+import numpy as np
+big = pd.DataFrame({'ticker': [f'A{i:03d}' for i in range(60)] + [f'B{i:03d}' for i in range(30)] + [f'C{i:03d}' for i in range(9)] + ['DEAD1', 'NOSEC'],
+                    'sector': ['Alpha'] * 60 + ['Beta'] * 30 + ['Gamma'] * 9 + ['Alpha', None],
+                    'zacks_x_ind_desc': 'Misc', 'status': ['HEALTHY'] * 99 + ['DELISTED', 'HEALTHY']})
+BIG = os.path.join(T, 'big-registry.csv'); big.to_csv(BIG, index=False)
+def sampled(text, name='sample.csv', watch=None):
+    path = os.path.join(T, name)
+    with open(path, 'w') as f:
+        f.write(text)
+    return Watchlist(rules_file=path, registry_file=BIG, tickers_file=watch or WATCH)
+draw = sampled("action,level,value,list\ninclude,sample,20,broad\n").resolve()
+by_sector = draw['ticker'].str[0].value_counts().to_dict()
+ok('sample: the requested number, split across sectors in proportion to their size', len(draw) == 20 and by_sector.get('A') == 12 and by_sector.get('B') == 6 and by_sector.get('C') == 2)
+ok('sample: delisted companies are never drawn', 'DEAD1' not in set(draw['ticker']))
+ok('sample: the same draw every time', sampled("action,level,value,list\ninclude,sample,20,broad\n").resolve()['ticker'].tolist() == draw['ticker'].tolist())
+ok('sample: recorded as the matching rule', set(draw['matched_by']) == {'sample:20'})
+other = sampled("action,level,value\ninclude,sample,21\n", 'sample2.csv').resolve()['ticker']
+ok('sample: a different size is a different draw, but mostly overlapping', len(other) == 21 and len(set(other) & set(draw['ticker'])) >= 15)
+ok('sample: asking for more than exist gives all usable companies', len(sampled("action,level,value\ninclude,sample,5000\n", 'sample3.csv').resolve()) == 100)
+watch2 = os.path.join(T, 'watch2.csv'); pd.DataFrame({'ticker': draw['ticker'].tolist()[:10]}).to_csv(watch2, index=False)
+mixed = sampled("action,level,value,list\ninclude,sample,20,broad\ninclude,ticker,C000,holdings\nexclude,ticker," + draw['ticker'].iloc[0] + ",\n", 'sample4.csv', watch2)
+ok('sample: works with the other rules, sub-lists and exclusions', draw['ticker'].iloc[0] not in mixed.members('broad') and len(mixed.members('broad')) == 9)
+for bad in ('0', 'ten', '-5'):
+    try: sampled(f"action,level,value\ninclude,sample,{bad}\n", 'bad-sample.csv').resolve(); raised = False
+    except ValueError: raised = True
+    ok(f'sample: an invalid size is rejected ({bad})', raised)

@@ -1,4 +1,7 @@
-"""Rule-based watchlist: expands include/exclude rules against the ticker registry, and serves named sub-lists."""
+"""Rule-based watchlist: expands include/exclude rules against the ticker registry, and serves named sub-lists.
+
+A sample rule (include,sample,2000) draws that many companies at random from the usable registry, spread across sectors in
+proportion to their size. A fixed seed makes it the same draw every time, for as long as the registry is unchanged."""
 import difflib
 import pandas as pd
 
@@ -6,7 +9,8 @@ import pandas as pd
 class Watchlist:
     UNUSABLE_STATUSES = {'DELISTED', 'INVALID'}
     # include works at any level; exclude is ticker-only by design.
-    ALLOWED = {('include', 'sector'), ('include', 'industry'), ('include', 'ticker'), ('exclude', 'ticker')}
+    ALLOWED = {('include', 'sector'), ('include', 'industry'), ('include', 'ticker'), ('include', 'sample'), ('exclude', 'ticker')}
+    SAMPLE_SEED = 2026   # fixed, so a sample rule always draws the same companies
     COLUMN = {'sector': 'sector', 'industry': 'zacks_x_ind_desc', 'ticker': 'symbol'}
 
     def __init__(self, rules_file="pipeline/watchlist-rules.csv", registry_file="data/registry/tickers.csv", tickers_file="data/watchlist.csv"):
@@ -29,7 +33,9 @@ class Watchlist:
         rules['level'] = rules['level'].str.lower()
         for r in rules.itertuples():
             if (r.action, r.level) not in self.ALLOWED:
-                raise ValueError(f"Invalid rule '{r.action},{r.level},{r.value}'. Allowed: include sector/industry/ticker, exclude ticker.")
+                raise ValueError(f"Invalid rule '{r.action},{r.level},{r.value}'. Allowed: include sector/industry/ticker/sample, exclude ticker.")
+            if r.level == 'sample' and not (r.value.isdigit() and int(r.value) > 0):
+                raise ValueError(f"Invalid sample size '{r.value}': it must be a whole number above zero.")
         return rules
 
     def _matches(self):
@@ -42,6 +48,10 @@ class Watchlist:
 
         picked = []
         for value, level, name in rules.loc[rules['action'] == 'include', ['value', 'level', 'list']].itertuples(index=False):
+            if level == 'sample':
+                hits = self._sample(usable, int(value))
+                picked.append(pd.DataFrame({'ticker': hits['symbol'], 'matched_by': f'sample:{value}', 'list': name}))
+                continue
             raw, value = value, self._yf_symbol(value) if level == 'ticker' else value
             if value not in known[level]:
                 if level == 'ticker':
@@ -55,6 +65,16 @@ class Watchlist:
         out = pd.concat(picked, ignore_index=True) if picked else pd.DataFrame(columns=['ticker', 'matched_by', 'list'])
         drop = {self._yf_symbol(v) for v in rules.loc[rules['action'] == 'exclude', 'value']}
         return out[~out['ticker'].isin(drop)]
+
+    def _sample(self, usable, n):
+        """n companies drawn at random, each sector getting its proportional share (largest remainders get the leftover places)."""
+        pool = usable.assign(sector=usable['sector'].fillna('Unclassified')).sort_values('symbol').drop_duplicates('symbol')
+        n = min(n, len(pool))
+        sizes = pool['sector'].value_counts().sort_index()
+        exact = sizes / sizes.sum() * n
+        quota = exact.astype(int)
+        quota[(exact - quota).sort_values(ascending=False, kind='stable').index[:n - quota.sum()]] += 1
+        return pd.concat([pool[pool['sector'] == sector].sample(k, random_state=self.SAMPLE_SEED) for sector, k in quota.items() if k > 0])
 
     def resolve(self):
         """Return DataFrame[ticker, matched_by] of yfinance symbols selected by the rules (the first rule that matched each)."""

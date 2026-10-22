@@ -13,10 +13,12 @@ class FundamentalData:
     STALE_DAYS = {'quarterly': 200, 'ttm': 200, 'annual': 500}   # how long a filed value stays usable in a daily table
 
     def __init__(self, data_dir: str = 'data/edgar', currency: Optional[str] = 'USD', include_red: bool = False, health: Optional[EdgarHealth] = None):
-        """Scope is the watchlist. By default red tickers and non-USD reporters are left out; currency=None keeps every currency."""
+        """Scope is the watchlist. By default red tickers and non-USD reporters are left out; currency=None keeps every currency.
+        Health bands come from the scores saved by the last update, unless a health object is passed in."""
         self.currency = currency
         self.include_red = include_red
-        self.health = health if health is not None else EdgarHealth(data_dir=data_dir)
+        self.health = health           # None: use the scores saved by the last update
+        self.data_dir = data_dir
         self.quarterly = self._load(os.path.join(data_dir, 'edgar-quarterly.csv'))
         self.annual = self._load(os.path.join(data_dir, 'edgar-annual.csv'))
         self._filers = None
@@ -35,7 +37,7 @@ class FundamentalData:
     def filers(self) -> pd.DataFrame:
         """One row per watchlist ticker: basis ('quarterly', 'annual' or 'none'), health band, currency, and whether this loader includes it."""
         if self._filers is None:
-            scored = self.health.score()
+            scored = self.health.score() if self.health is not None else EdgarHealth(data_dir=self.data_dir).saved()
             f = scored[['basis', 'band']].copy()
             f['currency'] = scored['currency'] if 'currency' in scored.columns else None
             f['included'] = (f['basis'] != 'none') & (self.include_red | (f['band'] != 'red')) \

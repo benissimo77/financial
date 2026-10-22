@@ -174,10 +174,12 @@ class Backtest:
         self.tickers = [t for t in wanted if t in available]
 
     def _red_tickers(self) -> set:
+        """Tickers red in the price health report: from the scores saved by the last update, unless a health object was passed in."""
         if self.health is None:
             from pipeline.DataHealth import DataHealth
-            self.health = DataHealth()
-        scored = self.health.score()
+            scored = DataHealth(data_file=self.prices.data_file).saved()
+        else:
+            scored = self.health.score()
         return set(scored.index[scored['band'] == 'red'])
 
     def universe(self) -> pd.DataFrame:

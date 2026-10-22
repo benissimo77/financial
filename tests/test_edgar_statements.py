@@ -70,7 +70,7 @@ ok('annual-only filer has no quarterly rows and three annual rows', q[q.ticker =
 ok('reporting currency chosen over the convenience translation', set(F['currency']) == {'TWD'} and F['equity'].iloc[-1] == 9000)
 ok('annual table for AAA has the full-year figures', a[a.ticker == 'AAA'][['revenue', 'cfo', 'assets', 'shares']].values.tolist() == [[470, 70, 1100, 52]])
 ok('unreadable raw file skipped and reported', 'BROKEN' not in set(q.ticker) | set(a.ticker) and 'SKIPPED' in log.getvalue() and 'BROKEN' in log.getvalue())
-ok('both files written, no temp files', sorted(f for f in os.listdir(T + '/EDGAR') if f != 'raw') == ['edgar-annual.csv', 'edgar-quarterly.csv'])
+ok('both files and the build record written, no temp files', sorted(f for f in os.listdir(T + '/EDGAR') if f != 'raw') == ['edgar-annual.csv', 'edgar-build.csv', 'edgar-quarterly.csv'])
 rt = pd.read_csv(T + '/EDGAR/edgar-quarterly.csv')
 ok('file round-trips with expected columns', list(rt.columns[:4]) == ['ticker', 'period_end', 'filed', 'currency'] and rt['period_end'].iloc[0] == '2025-03-31' and len(rt) == len(q))
 os.remove(T + '/EDGAR/edgar-quarterly.csv')
@@ -103,3 +103,47 @@ ok('proxy statement does not override the annual report', a2[a2.ticker == 'PRX']
 ok('restated figure beats the original left under an abandoned tag', a2[a2.ticker == 'RST']['revenue'].tolist() == [450, 520])
 ok('fourth quarter derived on one basis: original year minus original nine months', rev('RST') == [120, 125, 125, 130])
 ok('each derived quarter on one basis: Q3 original minus original, Q4 restated minus restated', rev('RS2') == [120, 125, 125, 110])
+
+# --- Incremental builds: only changed raw files are re-parsed, with the same result as a full rebuild
+import time
+def build(**kw):
+    with contextlib.redirect_stdout(io.StringIO()):
+        return es.build(**kw)
+read = lambda: (pd.read_csv(T + '/EDGAR/edgar-quarterly.csv'), pd.read_csv(T + '/EDGAR/edgar-annual.csv'))
+build(full=True); full_q, full_a = read()
+build()
+ok('nothing changed: nothing re-parsed, files unchanged', es.last_rebuilt == [] and read()[0].equals(full_q) and read()[1].equals(full_a))
+def write_json(name, obj):
+    with open(T + '/EDGAR/raw/' + name, 'w') as f:
+        json.dump(obj, f)
+with open(T + '/EDGAR/raw/AAA.json') as f:
+    raw = json.load(f)
+raw['facts']['us-gaap']['Revenues']['units']['USD'][0]['val'] = 101          # a changed filing for one company
+write_json('AAA.json', raw)
+build()
+ok('one changed raw file: only that ticker is re-parsed', es.last_rebuilt == ['AAA'])
+inc_q, inc_a = read()
+build(full=True)
+ok('the incremental result equals a full rebuild', inc_q.equals(read()[0]) and inc_a.equals(read()[1]))
+build()
+write_json('AAA.json', raw)                                              # rewritten with the same content: new timestamp
+os.utime(T + '/EDGAR/raw/AAA.json', ns=(time.time_ns() + 10**9, time.time_ns() + 10**9))
+build()
+ok('a rewritten file is re-parsed, the others are not', es.last_rebuilt == ['AAA'])
+with open(T + '/EDGAR/raw/WEEK.json') as f:
+    write_json('NEWCO.json', json.load(f))
+build()
+ok('a new raw file is added', es.last_rebuilt == ['NEWCO'] and 'NEWCO' in set(read()[0]['ticker']))
+os.remove(T + '/EDGAR/raw/NEWCO.json'); build()
+ok('a deleted raw file drops its rows', 'NEWCO' not in set(read()[0]['ticker']) and es.last_rebuilt == [])
+tags_path = T + '/tags.csv'
+with open(es.tags_file) as src, open(tags_path, 'w') as dst:
+    dst.write(src.read())
+es2 = EdgarStatements(data_dir=T + '/EDGAR', tags_file=tags_path)
+with contextlib.redirect_stdout(io.StringIO()): es2.build()
+with open(tags_path, 'a') as f:
+    f.write('revenue,duration,9,SalesRevenueGoodsNet\n')   # an edit to the tag map
+with contextlib.redirect_stdout(io.StringIO()): es2.build()
+ok('editing the tag map re-parses every ticker', sorted(es2.last_rebuilt) == sorted(f[:-5] for f in os.listdir(T + '/EDGAR/raw') if f.endswith('.json')))
+os.remove(T + '/EDGAR/edgar-build.csv'); build()
+ok('a missing build record means a full rebuild', len(es.last_rebuilt) == len([f for f in os.listdir(T + '/EDGAR/raw') if f.endswith('.json')]))

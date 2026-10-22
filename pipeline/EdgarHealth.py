@@ -17,11 +17,13 @@ class EdgarHealth:
     # Bands: green = use as is, amber = needs attention, red = exclude from analysis.
     # Restated years (quarters not summing to the annual figure) are reported but not scored: they are corporate history, not bad data.
     BANDS = (95, 80)            # score >= 95 green, >= 80 amber, otherwise red
+    HEATMAP_MAX_TICKERS = 150   # above this the heatmap shows one row per industry
 
     def __init__(self, data_dir='data/edgar', tickers_file='data/watchlist.csv', registry_file='data/registry/tickers.csv'):
         self.quarterly_file = os.path.join(data_dir, 'edgar-quarterly.csv')
         self.annual_file = os.path.join(data_dir, 'edgar-annual.csv')
         self.manifest_file = os.path.join(data_dir, 'edgar-manifest.csv')
+        self.saved_file = os.path.join(data_dir, 'edgar-health.csv')   # written by save()
         self.tickers_file = tickers_file
         self.registry_file = registry_file
 
@@ -145,6 +147,21 @@ class EdgarHealth:
         action = bad.apply(lambda r: '; '.join(dict.fromkeys(a for _, a in self._findings(r))), axis=1)
         return bad.assign(action=action)[cols]
 
+    def save(self, scored=None):
+        """Write the scores to saved_file (written by the Data Update notebook), so loaders and backtests need not recompute them."""
+        scored = self.score() if scored is None else scored
+        os.makedirs(os.path.dirname(self.saved_file) or '.', exist_ok=True)
+        tmp_path = self.saved_file + '.tmp'
+        scored.to_csv(tmp_path, date_format='%Y-%m-%d')
+        os.replace(tmp_path, self.saved_file)
+        return scored
+
+    def saved(self):
+        """The scores as last saved by the update. Raises if they have never been saved."""
+        if not os.path.exists(self.saved_file):
+            raise FileNotFoundError(f"{self.saved_file} not found: run section 2 of pipeline/Data Update.ipynb, which saves the health scores.")
+        return pd.read_csv(self.saved_file, index_col='ticker', keep_default_na=False, na_values=[''])   # keep the band 'n/a' as text
+
     def summary(self, scored=None):
         """Headline numbers for the report."""
         s = self.score() if scored is None else scored
@@ -171,8 +188,10 @@ class EdgarHealth:
         fig.update_layout(title=f"Fundamentals health: {len(s)} tickers, mean score {s['score'].mean():.1f}")
         return fig
 
-    def heatmap(self, scored=None):
-        """Ticker x calendar quarter: share of core metrics present. Blank where no period is expected (annual filers between year ends)."""
+    def heatmap(self, scored=None, by=None):
+        """Calendar-quarter grid of the share of core metrics present; blank where no period is expected (annual filers between year ends).
+        by='ticker' gives one row per ticker; by='industry' one row per industry, averaged over its tickers.
+        The default is per ticker up to HEATMAP_MAX_TICKERS tickers, per industry above that."""
         import plotly.graph_objects as go
         s = (self.score() if scored is None else scored)
         s = s[s['basis'] != 'none'].copy()
@@ -190,6 +209,17 @@ class EdgarHealth:
             filled = (100 * tb[self.CORE].notna().mean(axis=1)).groupby((tb['period_end'] - shift).dt.to_period('Q')).max()
             filled = filled[filled.index.isin(quarters)]
             grid.loc[ticker, filled.index] = filled.values
+        if (by or ('industry' if len(s) > self.HEATMAP_MAX_TICKERS else 'ticker')) == 'industry':
+            rows = grid.groupby(s['industry'], sort=False).mean()
+            counts = s.groupby('industry', sort=False).size()
+            fig = go.Figure(go.Heatmap(
+                z=rows.values, x=[str(c) for c in quarters], y=[f'{i} ({counts[i]})' for i in rows.index], zmin=0, zmax=100, colorscale='RdYlGn',
+                hoverongaps=False, showscale=False, hovertemplate='%{y}<br>%{x}: %{z:.0f}% of core metrics, averaged over its tickers<extra></extra>'))
+            fig.update_yaxes(autorange='reversed', type='category', tickfont=dict(size=9))
+            fig.update_xaxes(tickangle=-90, tickfont=dict(size=9))
+            fig.update_layout(title='Core-metric coverage by quarter, averaged by industry (number of tickers in brackets)',
+                              height=max(450, 15 * len(rows) + 150), margin=dict(t=50, l=5, r=20, b=60))
+            return fig
         label = (s['basis'].map({'quarterly': '', 'annual': ' (annual)'}) + ' ' + s['industry']).to_numpy(dtype=object)
         fig = go.Figure(go.Heatmap(
             z=grid.values, x=[str(c) for c in quarters], y=list(s.index), zmin=0, zmax=100, colorscale='RdYlGn', hoverongaps=False,

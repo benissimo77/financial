@@ -195,3 +195,8 @@ with contextlib.redirect_stdout(io.StringIO()) as out:
     r.tear_sheet()
 ok('tear_sheet() runs outside a notebook, shows the figure once, and prints the tables and caveats', len(shown) == 1 and 'Annual return' in out.getvalue()
    and 'Calendar-year returns' in out.getvalue() and 'Contributors' in out.getvalue() and 'Caveats' in out.getvalue())
+
+# Without a health object the backtest reads the saved price health scores
+pd.DataFrame({'ticker': list(series), 'band': ['red' if t == 'RED' else 'green' for t in series]}).to_csv(os.path.join(T, 'price-health.csv'), index=False)
+u2 = Backtest(lambda d: None, prices=prices).universe()
+ok('saved price health scores are used by default: red tickers left out', 'RED' not in u2.columns and 'UP' in u2.columns)

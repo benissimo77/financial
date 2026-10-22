@@ -13,6 +13,7 @@ class DataHealth:
     ZERO_VOLUME_LIMIT = 10  # percent of the recent window
     FLAT_CLOSE_LIMIT = 5    # percent of the recent window
     BANDS = (95, 80)        # score >= 95 green, >= 80 amber, otherwise red
+    HEATMAP_MAX_TICKERS = 150   # above this the heatmap shows one row per industry
 
     def __init__(self, data_file='data/prices/yf-prices.parquet', manifest_file='data/prices/yf-manifest.csv',
                  tickers_file='data/watchlist.csv', registry_file='data/registry/tickers.csv', calendar_ticker='SPY'):
@@ -21,6 +22,7 @@ class DataHealth:
         self.tickers_file = tickers_file
         self.registry_file = registry_file
         self.calendar_ticker = calendar_ticker
+        self.saved_file = os.path.join(os.path.dirname(data_file), 'price-health.csv')   # written by save()
 
     def _active_tickers(self):
         wl = pd.read_csv(self.tickers_file, comment='#', skip_blank_lines=True)
@@ -139,6 +141,21 @@ class DataHealth:
         action = bad.apply(lambda r: '; '.join(dict.fromkeys(a for _, a in self._findings(r))), axis=1)
         return bad.assign(action=action)[cols]
 
+    def save(self, scored=None):
+        """Write the scores to saved_file (written by the Data Update notebook), so loaders and backtests need not recompute them."""
+        scored = self.score() if scored is None else scored
+        os.makedirs(os.path.dirname(self.saved_file) or '.', exist_ok=True)
+        tmp_path = self.saved_file + '.tmp'
+        scored.to_csv(tmp_path, date_format='%Y-%m-%d')
+        os.replace(tmp_path, self.saved_file)
+        return scored
+
+    def saved(self):
+        """The scores as last saved by the update. Raises if they have never been saved."""
+        if not os.path.exists(self.saved_file):
+            raise FileNotFoundError(f"{self.saved_file} not found: run section 2 of pipeline/Data Update.ipynb, which saves the health scores.")
+        return pd.read_csv(self.saved_file, index_col='ticker', keep_default_na=False, na_values=[''])   # keep the band 'n/a' as text
+
     def summary(self, scored=None):
         """Headline numbers for the report."""
         s = self.score() if scored is None else scored
@@ -185,8 +202,10 @@ class DataHealth:
         fig.update_layout(title=f"Price data health: {len(s)} tickers, mean score {s['score'].mean():.1f}", margin=dict(t=50, l=5, r=5, b=5))
         return fig
 
-    def heatmap(self, scored=None, since=None):
-        """Ticker x quarter grid: share of expected trading days present. Blank before a ticker's first date. Grouped by industry."""
+    def heatmap(self, scored=None, since=None, by=None):
+        """Quarter grid of the share of expected trading days present, blank before a ticker's first date.
+        by='ticker' gives one row per ticker, grouped by industry; by='industry' one row per industry, averaged over its tickers.
+        The default is per ticker up to HEATMAP_MAX_TICKERS tickers, per industry above that."""
         import plotly.graph_objects as go
         s = (self.score() if scored is None else scored).copy()
         s = s[s['in_database']]
@@ -208,6 +227,18 @@ class DataHealth:
         expected = per_q.values[None, :] - before_first
         with np.errstate(invalid='ignore', divide='ignore'):
             coverage = np.where(expected > 0, np.minimum(100 * present.values / expected, 100), np.nan)
+
+        if (by or ('industry' if len(s) > self.HEATMAP_MAX_TICKERS else 'ticker')) == 'industry':
+            rows = pd.DataFrame(coverage, index=s.index).groupby(s['industry'], sort=False).mean()
+            counts = s.groupby('industry', sort=False).size()
+            fig = go.Figure(go.Heatmap(
+                z=rows.values, x=[str(q) for q in per_q.index], y=[f'{i} ({counts[i]})' for i in rows.index], zmin=70, zmax=100, colorscale='RdYlGn',
+                hoverongaps=False, hovertemplate='%{y}<br>%{x}: %{z:.1f}% of trading days, averaged over its tickers<extra></extra>', showscale=False))
+            fig.update_yaxes(autorange='reversed', type='category', tickfont=dict(size=9))
+            fig.update_xaxes(tickangle=-90, tickfont=dict(size=9))
+            fig.update_layout(title='Trading-day coverage by quarter, averaged by industry (number of tickers in brackets)',
+                              height=max(450, 15 * len(rows) + 150), margin=dict(t=50, l=5, r=20, b=60))
+            return fig
 
         fig = go.Figure(go.Heatmap(
             z=coverage, x=[str(q) for q in per_q.index], y=list(s.index), zmin=70, zmax=100, colorscale='RdYlGn',

@@ -66,3 +66,24 @@ ok('treemap has a tile per ticker, grouped by sector and industry', sum(str(i).c
 ok('heatmap: full quarters show 100, the hole shows less, quarters before a first date are blank', grid.loc['GOOD'].dropna().eq(100).all() and grid.loc['GAPPY'].min() < 100
    and grid.loc['YOUNG'].isna().any() and 'MISSING' not in grid.index)
 ok('nothing written', digest() == before)
+
+# Saved scores: written by the update, read by loaders and backtests
+h.save(s)
+saved_path = os.path.join(T, 'price-health.csv')
+back = h.saved()
+ok('save() writes the scores next to the price file, and saved() reads them back', os.path.exists(saved_path) and list(back.index) == list(s.index)
+   and back['band'].tolist() == s['band'].tolist() and np.allclose(back['score'], s['score']))
+try: DataHealth(data_file=os.path.join(T, 'elsewhere', 'prices.parquet')).saved(); raised = None
+except FileNotFoundError as e: raised = str(e)
+ok('reading scores that were never saved raises, saying how to create them', raised is not None and 'Data Update' in raised)
+
+# Heatmap per industry: averages its tickers, chosen automatically above HEATMAP_MAX_TICKERS
+hi = h.heatmap(s, by='industry')
+rows = pd.DataFrame(hi.data[0].z, index=hi.data[0].y, columns=hi.data[0].x)
+per_ticker = pd.DataFrame(hm.data[0].z, index=hm.data[0].y, columns=hm.data[0].x)
+soft = [t for t in per_ticker.index if s.at[t, 'industry'] == 'Software']
+counts = s[s['in_database']].groupby('industry').size()
+ok('industry heatmap: one row per industry with its ticker count, averaging its tickers', sorted(rows.index) == sorted(f'{i} ({n})' for i, n in counts.items())
+   and np.allclose(rows.loc[f"Software ({counts['Software']})"].values, per_ticker.loc[soft].mean().values, equal_nan=True))
+small = DataHealth(data_file=P, manifest_file=M, tickers_file=W, registry_file=R); small.HEATMAP_MAX_TICKERS = 3
+ok('above the limit the industry view is the default', len(small.heatmap(s).data[0].y) == 2 and len(h.heatmap(s).data[0].y) == len(watch) - 1)

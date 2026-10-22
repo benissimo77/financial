@@ -1,5 +1,6 @@
 """Builds quarterly and annual statement tables from the raw EDGAR facts, using the tag map in pipeline/edgar-tags.csv.
-Reads data/edgar/raw only; the two output files are regenerated in full on every build."""
+Reads data/edgar/raw only. Each build re-parses only the tickers whose raw file changed, with the same result as a full rebuild."""
+import hashlib
 import json
 import os
 import pandas as pd
@@ -19,6 +20,8 @@ class EdgarStatements:
         self.raw_dir = os.path.join(data_dir, 'raw')
         self.quarterly_file = os.path.join(data_dir, 'edgar-quarterly.csv')
         self.annual_file = os.path.join(data_dir, 'edgar-annual.csv')
+        self.record_file = os.path.join(data_dir, 'edgar-build.csv')   # what each ticker's rows were built from
+        self.last_rebuilt = []
         self.tags_file = tags_file
 
     def _load_tags(self):
@@ -121,11 +124,16 @@ class EdgarStatements:
         df.to_csv(tmp_path, index=False, date_format='%Y-%m-%d')
         os.replace(tmp_path, path)
 
-    def build(self, tickers=None):
-        """Rebuild both statement files from the raw files. Returns (quarterly, annual). With tickers given, nothing is written."""
-        tags = self._load_tags()
-        metrics = list(dict.fromkeys(tags['metric']))
-        names = tickers_in(self.raw_dir, '.json') if tickers is None else list(tickers)
+    def _record(self, names, tags_hash):
+        """What each ticker's rows were built from: its raw file's timestamp and size, and the tag map in use."""
+        rows = []
+        for t in names:
+            st = os.stat(path_for(self.raw_dir, t, '.json'))
+            rows.append((t, st.st_mtime_ns, st.st_size, tags_hash))
+        return pd.DataFrame(rows, columns=['ticker', 'mtime_ns', 'size', 'tags_hash'])
+
+    def _parse(self, names, tags):
+        """Build quarterly and annual rows for these tickers from their raw files. An unreadable file is reported and skipped."""
         quarterly, annual = [], []
         for ticker in names:
             try:
@@ -135,11 +143,43 @@ class EdgarStatements:
                 continue
             quarterly.append(self._table(ticker, tags, facts, currency, annual=False))
             annual.append(self._table(ticker, tags, facts, currency, annual=True))
-        cols = self.KEYS + metrics
-        out = [pd.concat(parts, ignore_index=True)[cols].sort_values(['ticker', 'period_end']).reset_index(drop=True) if parts else pd.DataFrame(columns=cols)
-               for parts in (quarterly, annual)]
-        if tickers is None:
-            self._write_csv_atomic(out[0], self.quarterly_file)
-            self._write_csv_atomic(out[1], self.annual_file)
-            print(f"EDGAR statements: {out[0]['ticker'].nunique()} tickers with quarterly rows ({len(out[0])} rows), {out[1]['ticker'].nunique()} with annual rows ({len(out[1])} rows).")
+        return quarterly, annual
+
+    def build(self, tickers=None, full=False):
+        """Bring both statement files up to date with the raw files. Returns (quarterly, annual).
+        Only tickers whose raw file changed since the last build are re-parsed (all of them after an edit to the tag map, or
+        with full=True); the result is the same as a full rebuild. With tickers given, those are built and nothing is written."""
+        tags = self._load_tags()
+        cols = self.KEYS + list(dict.fromkeys(tags['metric']))
+        if tickers is not None:
+            parts = self._parse(list(tickers), tags)
+            return tuple(pd.concat(p, ignore_index=True)[cols].sort_values(['ticker', 'period_end']).reset_index(drop=True) if p else pd.DataFrame(columns=cols)
+                         for p in parts)
+
+        with open(self.tags_file, 'rb') as f:
+            tags_hash = hashlib.sha1(f.read()).hexdigest()
+        names = tickers_in(self.raw_dir, '.json')
+        record = self._record(names, tags_hash)
+        have_outputs = all(os.path.exists(f) for f in (self.quarterly_file, self.annual_file, self.record_file))
+        if full or not have_outputs:
+            stale, keep = names, []
+        else:
+            previous = pd.read_csv(self.record_file, dtype={'ticker': str, 'tags_hash': str})
+            same = record.merge(previous, on=['ticker', 'mtime_ns', 'size', 'tags_hash'], how='left', indicator=True)['_merge'] == 'both'
+            keep, stale = record.loc[same.values, 'ticker'].tolist(), record.loc[~same.values, 'ticker'].tolist()
+
+        quarterly, annual = self._parse(stale, tags)
+        out = []
+        for path, parts in ((self.quarterly_file, quarterly), (self.annual_file, annual)):
+            if keep:
+                old = pd.read_csv(path, parse_dates=['period_end', 'filed'])
+                parts = [old[old['ticker'].isin(keep)]] + parts
+            table = pd.concat(parts, ignore_index=True)[cols] if parts else pd.DataFrame(columns=cols)
+            out.append(table.sort_values(['ticker', 'period_end']).reset_index(drop=True))
+        self._write_csv_atomic(out[0], self.quarterly_file)
+        self._write_csv_atomic(out[1], self.annual_file)
+        self._write_csv_atomic(record, self.record_file)   # written last: if a build is interrupted, the next one redoes it
+        self.last_rebuilt = stale
+        print(f"EDGAR statements: re-parsed {len(stale)} of {len(names)} tickers; {out[0]['ticker'].nunique()} with quarterly rows ({len(out[0])} rows), "
+              f"{out[1]['ticker'].nunique()} with annual rows ({len(out[1])} rows).")
         return out[0], out[1]
