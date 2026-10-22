@@ -36,8 +36,8 @@ for t, px in series.items():
         if t == 'LATE' and d < pd.Timestamp('2020-03-02'): continue
         vol = 1e3 if (t == 'THIN' and d < pd.Timestamp('2020-03-01')) else 1e6
         rows.append((t, d.strftime('%Y-%m-%d'), px[i], px[i], px[i], px[i], vol, px[i]))
-path = os.path.join(T, 'prices.csv')
-pd.DataFrame(rows, columns=['ticker', 'date', 'open', 'high', 'low', 'close', 'volume', 'adj_close']).to_csv(path, index=False)
+path = os.path.join(T, 'prices.parquet')
+pd.DataFrame(rows, columns=['ticker', 'date', 'open', 'high', 'low', 'close', 'volume', 'adj_close']).to_parquet(path, index=False)
 prices = PriceData(path, tickers_file=None)
 
 
@@ -141,8 +141,8 @@ ok('equal-weight baseline = owning every eligible ticker equally, same schedule 
 spy = r.baselines['SPY']
 ok('SPY baseline: bought at the strategy\'s first trade, with the same cost, then held', spy.equity.loc[test_days[0]] == 1.0
    and near(spy.equity.iloc[-1], px['SPY'].iloc[-1] / px['SPY'].loc[first_trade] * 0.999) and (spy.turnover > 0).sum() == 1)
-no_spy_path = os.path.join(T, 'prices-no-spy.csv')
-pd.read_csv(path).query("ticker != 'SPY'").to_csv(no_spy_path, index=False)
+no_spy_path = os.path.join(T, 'prices-no-spy.parquet')
+pd.read_parquet(path).query("ticker != 'SPY'").to_parquet(no_spy_path, index=False)
 r2 = Backtest(lambda d: hold(d.prices.notna()), prices=PriceData(no_spy_path, tickers_file=None), health=Health(), start=START).run()
 ok('without benchmark prices the run still works, with only the equal-weight baseline', list(r2.baselines) == ['Equal-weight universe'])
 

@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 import pandas as pd
 import requests
+from pipeline.TickerFiles import path_for
 
 
 class Edgar:
@@ -41,7 +42,7 @@ class Edgar:
         return list(dict.fromkeys(df.iloc[:, 0].dropna().astype(str).str.strip().str.upper()))
 
     def raw_path(self, ticker):
-        return os.path.join(self.raw_dir, f"{ticker}.json")
+        return path_for(self.raw_dir, ticker, '.json')
 
     def cik_map(self):
         """Series of CIK by ticker, from SEC's list. SEC uses '-' for share classes (BRK-B), the same as yfinance."""

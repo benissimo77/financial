@@ -18,10 +18,10 @@ class PriceData:
         out_sample = wide.iloc[split_idx:].copy()
         return in_sample, out_sample
 
-    def __init__(self, csv_file: str = "data/prices/yf-prices.csv", tickers_file: Optional[str] = "data/watchlist.csv"):
+    def __init__(self, data_file: str = "data/prices/yf-prices.parquet", tickers_file: Optional[str] = "data/watchlist.csv"):
         """Scope is the watchlist, like FundamentalData. tickers_file=None serves every ticker in the price file,
         including ones that have left the watchlist and are no longer updated."""
-        self.csv_file = csv_file
+        self.data_file = data_file
         self.df = self._load_data()
         if tickers_file is not None:
             watch = pd.read_csv(tickers_file, comment='#', skip_blank_lines=True)
@@ -31,10 +31,10 @@ class PriceData:
 
     def _load_data(self) -> pd.DataFrame:
         # A missing or malformed file raises here, rather than returning an empty table that fails confusingly later.
-        df = pd.read_csv(self.csv_file)
+        df = pd.read_parquet(self.data_file)
         missing = [col for col in ['ticker', 'date', 'close', 'adj_close', 'volume'] if col not in df.columns]
         if missing:
-            raise ValueError(f"{self.csv_file} is missing column(s): {missing}")
+            raise ValueError(f"{self.data_file} is missing column(s): {missing}")
         return df
 
     def get_tickers(self) -> List[str]:

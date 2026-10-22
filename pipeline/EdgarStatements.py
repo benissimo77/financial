@@ -3,6 +3,7 @@ Reads data/edgar/raw only; the two output files are regenerated in full on every
 import json
 import os
 import pandas as pd
+from pipeline.TickerFiles import path_for, tickers_in
 
 
 class EdgarStatements:
@@ -32,7 +33,7 @@ class EdgarStatements:
 
     def _facts(self, ticker, tags):
         """All reported values for the mapped tags, in the company's reporting currency (plus share counts)."""
-        with open(os.path.join(self.raw_dir, f"{ticker}.json"), encoding='utf-8') as f:
+        with open(path_for(self.raw_dir, ticker, '.json'), encoding='utf-8') as f:
             raw = json.load(f)['facts']
         wanted = set(tags['tag'])
         rows = [(tag, unit, r.get('start'), r['end'], r['val'], r['filed'])
@@ -124,7 +125,7 @@ class EdgarStatements:
         """Rebuild both statement files from the raw files. Returns (quarterly, annual). With tickers given, nothing is written."""
         tags = self._load_tags()
         metrics = list(dict.fromkeys(tags['metric']))
-        names = sorted(f[:-5] for f in os.listdir(self.raw_dir) if f.endswith('.json')) if tickers is None else list(tickers)
+        names = tickers_in(self.raw_dir, '.json') if tickers is None else list(tickers)
         quarterly, annual = [], []
         for ticker in names:
             try:

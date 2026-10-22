@@ -14,7 +14,7 @@ class DataHealth:
     FLAT_CLOSE_LIMIT = 5    # percent of the recent window
     BANDS = (95, 80)        # score >= 95 green, >= 80 amber, otherwise red
 
-    def __init__(self, data_file='data/prices/yf-prices.csv', manifest_file='data/prices/yf-manifest.csv',
+    def __init__(self, data_file='data/prices/yf-prices.parquet', manifest_file='data/prices/yf-manifest.csv',
                  tickers_file='data/watchlist.csv', registry_file='data/registry/tickers.csv', calendar_ticker='SPY'):
         self.data_file = data_file
         self.manifest_file = manifest_file
@@ -39,7 +39,8 @@ class DataHealth:
         """One row per watchlist ticker (index = ticker). as_of overrides today, for tests."""
         today = pd.Timestamp(as_of).normalize() if as_of is not None else pd.Timestamp.today().normalize()
         active = self._active_tickers()
-        px = pd.read_csv(self.data_file, low_memory=False, parse_dates=['date'])
+        px = pd.read_parquet(self.data_file)
+        px['date'] = pd.to_datetime(px['date'])
         cal = self._trading_calendar(px, self.calendar_ticker)
         cutoff = today - pd.Timedelta(days=self.LAG_DAYS)
         # Weekdays after the calendar's last date also count as expected, so a database-wide stall still shows as behind.
@@ -192,7 +193,8 @@ class DataHealth:
         s['sector'], s['industry'] = s['sector'].fillna('Unclassified'), s['industry'].fillna('Unclassified')
         s = s.reset_index().sort_values(['sector', 'industry', 'ticker']).set_index('ticker')
 
-        px = pd.read_csv(self.data_file, usecols=['ticker', 'date'], parse_dates=['date'])
+        px = pd.read_parquet(self.data_file, columns=['ticker', 'date'])
+        px['date'] = pd.to_datetime(px['date'])
         cal = self._trading_calendar(px, self.calendar_ticker)
         if since is not None:
             cal = cal[cal >= pd.Timestamp(since)]
@@ -209,7 +211,7 @@ class DataHealth:
 
         fig = go.Figure(go.Heatmap(
             z=coverage, x=[str(q) for q in per_q.index], y=list(s.index), zmin=70, zmax=100, colorscale='RdYlGn',
-            customdata=np.repeat(s['industry'].values[:, None], len(per_q), axis=1), hoverongaps=False,
+            customdata=np.repeat(s['industry'].to_numpy(dtype=object)[:, None], len(per_q), axis=1), hoverongaps=False,
             hovertemplate='%{y} (%{customdata})<br>%{x}: %{z:.1f}% of trading days<extra></extra>',
             showscale=False))
         start = 0

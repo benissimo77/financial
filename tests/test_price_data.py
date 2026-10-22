@@ -11,8 +11,8 @@ ok = lambda name, cond: print(('PASS' if cond else 'FAIL'), name)
 dates = [d.strftime('%Y-%m-%d') for d in pd.bdate_range('2026-01-05', periods=10)]
 rows = [(t, d, 10.0 + i, 11.0 + i, 9.0 + i, base + i, 1000.0, (base + i) * 0.9)
         for t, base in (('BBB', 200.0), ('AAA', 100.0)) for i, d in enumerate(dates)]   # deliberately unsorted; adj_close = 0.9 * close
-good = os.path.join(T, 'prices.csv')
-pd.DataFrame(rows, columns=['ticker', 'date', 'open', 'high', 'low', 'close', 'volume', 'adj_close']).to_csv(good, index=False)
+good = os.path.join(T, 'prices.parquet')
+pd.DataFrame(rows, columns=['ticker', 'date', 'open', 'high', 'low', 'close', 'volume', 'adj_close']).to_parquet(good, index=False)
 
 pdata = PriceData(good, tickers_file=None)   # every ticker in the file
 ok('tickers listed in order', pdata.get_tickers() == ['AAA', 'BBB'])
@@ -28,13 +28,13 @@ ok('date filter is inclusive at both ends', len(sub) == 4 and sub['date'].min() 
 ins, outs = pdata.split_inout_sample()
 ok('70/30 split is chronological and on adjusted prices', len(ins) == 7 and len(outs) == 3 and ins.index.max() < outs.index.min() and ins['AAA'].iloc[0] == 90.0)
 
-try: PriceData(os.path.join(T, 'missing.csv'), tickers_file=None); raised = None
+try: PriceData(os.path.join(T, 'missing.parquet'), tickers_file=None); raised = None
 except Exception as e: raised = e
-ok('missing file raises, naming the file', isinstance(raised, FileNotFoundError) and 'missing.csv' in str(raised))
-bad = os.path.join(T, 'bad.csv'); pd.DataFrame({'ticker': ['AAA'], 'date': ['2026-01-05'], 'close': [1.0]}).to_csv(bad, index=False)
+ok('missing file raises, naming the file', isinstance(raised, FileNotFoundError) and 'missing.parquet' in str(raised))
+bad = os.path.join(T, 'bad.parquet'); pd.DataFrame({'ticker': ['AAA'], 'date': ['2026-01-05'], 'close': [1.0]}).to_parquet(bad, index=False)
 try: PriceData(bad, tickers_file=None); raised = None
 except Exception as e: raised = e
-ok('file without the required columns raises, naming the file and the columns', isinstance(raised, ValueError) and 'bad.csv' in str(raised) and 'adj_close' in str(raised))
+ok('file without the required columns raises, naming the file and the columns', isinstance(raised, ValueError) and 'bad.parquet' in str(raised) and 'adj_close' in str(raised))
 
 watch = os.path.join(T, 'watch.csv')
 with open(watch, 'w') as f:

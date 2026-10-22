@@ -6,9 +6,9 @@ os.chdir(ROOT); sys.path.insert(0, ROOT)
 import sys, os, io, contextlib, shutil, hashlib, warnings; warnings.filterwarnings('ignore'); sys.path.insert(0, '.')
 import pandas as pd
 from pipeline.YF import YF
-real = hashlib.md5(open('data/prices/yf-prices.csv', 'rb').read()).hexdigest(); real_man = hashlib.md5(open('data/prices/yf-manifest.csv', 'rb').read()).hexdigest()
+real = hashlib.md5(open('data/prices/yf-prices.parquet', 'rb').read()).hexdigest(); real_man = hashlib.md5(open('data/prices/yf-manifest.csv', 'rb').read()).hexdigest()
 T = tempfile.mkdtemp() + '/tmpdata4'; shutil.rmtree(T, ignore_errors=True); os.makedirs(T)
-P, M, W, R = T + '/prices.csv', T + '/manifest.csv', T + '/watch.csv', T + '/reg.csv'
+P, M, W, R = T + '/prices.parquet', T + '/manifest.csv', T + '/watch.csv', T + '/reg.csv'
 cols = ['ticker', 'date', 'open', 'high', 'low', 'close', 'volume', 'adj_close']
 dates = [d.strftime('%Y-%m-%d') for d in pd.bdate_range('2026-06-01', (pd.Timestamp.today() - pd.Timedelta(days=7)))]
 def rows(t, adj=10.0): return pd.DataFrame([[t, d, 10.0, 10.0, 10.0, 10.0, 100.0, adj] for d in dates], columns=cols)
@@ -16,7 +16,7 @@ names = [f'T{i:02d}' for i in range(12)]
 stored = pd.concat([rows(t) for t in names]); stale = (stored.ticker == 'T03') & (stored.date < '2026-07-01')
 stored.loc[stale, 'adj_close'] = 9.9          # T03: old rows carry a stale adjustment
 stored = stored[~((stored.ticker == 'T05') & (stored.date == dates[10]))]   # T05: one missing day
-stored.to_csv(P, index=False)
+stored.to_parquet(P, index=False)
 pd.DataFrame({'ticker': names}).to_csv(W, index=False)
 pd.DataFrame({'ticker': names, 'status': 'HEALTHY', 'last_update': '2026-01-01'}).to_csv(R, index=False)
 def fake(self, ticker, start_date="2000-01-01", end_date=None):
@@ -33,8 +33,8 @@ pd.DataFrame({'ticker': names, 'last_date': dates[-1], 'last_attempt': '2026-10-
 with quiet(): r1 = mk().verify_sample()
 res = dict(r1.values)
 ok('sample is 8 tickers, skipping the one whose last scrape failed', len(r1) == 8 and 'T00' not in res and list(res) == names[1:9])
-ok('stale adjustment repaired', res['T03'] == 'repaired' and (pd.read_csv(P).query("ticker == 'T03'")['adj_close'] == 10.0).all())
-ok('missing day repaired', res['T05'] == 'repaired' and len(pd.read_csv(P).query("ticker == 'T05'")) == len(dates))
+ok('stale adjustment repaired', res['T03'] == 'repaired' and (pd.read_parquet(P).query("ticker == 'T03'")['adj_close'] == 10.0).all())
+ok('missing day repaired', res['T05'] == 'repaired' and len(pd.read_parquet(P).query("ticker == 'T05'")) == len(dates))
 ok('download failure reported, not marked verified', res['T01'] == 'failed' and pd.isna(man().at['T01', 'last_verified']))
 ok('matching tickers reported as match', all(res[t] == 'match' for t in ['T02', 'T04', 'T06', 'T07', 'T08']))
 ok('verified tickers stamped', man()['last_verified'].notna().sum() == 7)
@@ -43,5 +43,23 @@ m = man()
 ok('daily_update keeps last_verified and runs the sample', m.at['T02', 'last_verified'] == pd.Timestamp.today().strftime('%Y-%m-%d') and m['last_verified'].notna().sum() == 11 and pd.isna(m.at['T01', 'last_verified']))
 with quiet(): r3 = mk().verify_sample()
 ok('next sample starts with the unverified ticker, then cycles', r3['ticker'].iloc[0] == 'T01' and (r3['result'].iloc[1:] == 'match').all())
-ok('no rows lost, no duplicates', pd.read_csv(P).ticker.value_counts().eq(len(dates)).all() and not pd.read_csv(P).duplicated(['ticker', 'date']).any())
-ok('real data files untouched', real == hashlib.md5(open('data/prices/yf-prices.csv', 'rb').read()).hexdigest() and real_man == hashlib.md5(open('data/prices/yf-manifest.csv', 'rb').read()).hexdigest())
+ok('no rows lost, no duplicates', pd.read_parquet(P).ticker.value_counts().eq(len(dates)).all() and not pd.read_parquet(P).duplicated(['ticker', 'date']).any())
+# One save per update, even with both kinds of repair: T07's recent rows are stale (caught by the drift check during the
+# update) and T09's old rows are stale (caught only by the verification sample). New data is also due for every ticker.
+df = pd.read_parquet(P)
+df = df[~df['date'].isin(dates[-3:])]                                    # last three days missing for everyone
+df.loc[df['ticker'] == 'T07', 'adj_close'] = 9.9
+df.loc[(df['ticker'] == 'T09') & (df['date'] < dates[-20]), 'adj_close'] = 9.9
+df.to_parquet(P, index=False)
+m = pd.read_csv(M, dtype=str); m.loc[m['ticker'] == 'T09', 'last_verified'] = None; m.to_csv(M, index=False)
+writes = []
+original_write = YF._write_prices
+YF._write_prices = lambda self, frame: (writes.append(len(frame)), original_write(self, frame))[1]
+with quiet(): mk().daily_update()
+YF._write_prices = original_write
+after = pd.read_parquet(P)
+ok('an update with new data, a drift repair and a verification repair saves the price file once', len(writes) == 1)
+ok('all three changes are in that one save', after['date'].max() == dates[-1] and (after.loc[after.ticker == 'T07', 'adj_close'] == 10.0).all()
+   and (after.loc[after.ticker == 'T09', 'adj_close'] == 10.0).all() and not after.duplicated(['ticker', 'date']).any())
+ok('both repaired tickers are marked as verified today', man().loc[['T07', 'T09'], 'last_verified'].eq(pd.Timestamp.today().strftime('%Y-%m-%d')).all())
+ok('real data files untouched', real == hashlib.md5(open('data/prices/yf-prices.parquet', 'rb').read()).hexdigest() and real_man == hashlib.md5(open('data/prices/yf-manifest.csv', 'rb').read()).hexdigest())

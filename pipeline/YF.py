@@ -1,4 +1,5 @@
-"""Yahoo Finance price scraper: incremental downloads, manifest, liquidity screen and single-ticker refresh."""
+"""Yahoo Finance prices: incremental downloads into one Parquet file, manifest, liquidity screen, repairs and verification.
+Each update gathers every change in memory and saves the price file once."""
 import os
 from datetime import datetime
 import pandas as pd
@@ -16,8 +17,9 @@ class YF:
     ADJ_DRIFT_TOLERANCE = 1e-4  # relative close/adj_close difference vs Yahoo that signals a dividend or split since the last fetch
     MAX_REFRESH_PER_RUN = 20    # safeguard against a Yahoo glitch triggering many full re-downloads
     VERIFY_PER_RUN = 8          # tickers whose full history is compared with Yahoo on each daily update
+    COLUMNS = ['ticker', 'date', 'open', 'high', 'low', 'close', 'volume', 'adj_close']   # date is stored as 'YYYY-MM-DD' text
 
-    def __init__(self, tickers_file="data/watchlist.csv", data_file="data/prices/yf-prices.csv",
+    def __init__(self, tickers_file="data/watchlist.csv", data_file="data/prices/yf-prices.parquet",
                  registry_file="data/registry/tickers.csv", manifest_file="data/prices/yf-manifest.csv",
                  screen_file="data/prices/yf-screen.csv"):
         self.tickers_file = tickers_file
@@ -39,16 +41,23 @@ class YF:
         df.to_csv(tmp_path, index=False)
         os.replace(tmp_path, path)
 
+    def _read_prices(self):
+        """The whole price table, or an empty one if there is no file yet."""
+        return pd.read_parquet(self.data_file) if os.path.exists(self.data_file) else pd.DataFrame(columns=self.COLUMNS)
+
     def _write_prices(self, df):
-        """Write the prices file, refusing if any ticker would end up with fewer rows than it has on disk."""
+        """Write the price file, refusing if any ticker would end up with fewer rows than it has on disk.
+        Written to a temporary file first and then renamed, so a crash cannot leave a half-written file."""
         if os.path.exists(self.data_file):
-            before = pd.read_csv(self.data_file, usecols=['ticker'])['ticker'].value_counts()
+            before = pd.read_parquet(self.data_file, columns=['ticker'])['ticker'].value_counts()
             lost = before - df['ticker'].value_counts().reindex(before.index, fill_value=0)
             lost = lost[lost > 0]
             if not lost.empty:
                 raise RuntimeError(f"Write refused: {len(lost)} ticker(s) would lose rows, e.g. {lost.head(5).to_dict()}. {self.data_file} left unchanged.")
         os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
-        self._write_csv_atomic(df, self.data_file)
+        tmp_path = self.data_file + '.tmp'
+        df[self.COLUMNS].sort_values(['ticker', 'date']).to_parquet(tmp_path, index=False)
+        os.replace(tmp_path, self.data_file)
 
     def _load_tickers(self):
         if os.path.exists(self.tickers_file):
@@ -155,35 +164,44 @@ class YF:
         os.makedirs(os.path.dirname(self.manifest_file), exist_ok=True)
         self._write_csv_atomic(new.sort_values('ticker'), self.manifest_file)
 
-    def _mark_verified(self, ticker):
-        """Record today as the date this ticker's stored history last matched Yahoo."""
-        if not os.path.exists(self.manifest_file):
+    def _mark_verified(self, tickers):
+        """Record today as the date these tickers' stored history last matched Yahoo."""
+        if not tickers or not os.path.exists(self.manifest_file):
             return
         man = pd.read_csv(self.manifest_file, dtype=str)
         if 'last_verified' not in man.columns:
             man['last_verified'] = None
-        man.loc[man['ticker'] == ticker, 'last_verified'] = datetime.now().strftime('%Y-%m-%d')
+        man.loc[man['ticker'].isin(tickers), 'last_verified'] = datetime.now().strftime('%Y-%m-%d')
         self._write_csv_atomic(man, self.manifest_file)
 
-    def verify_sample(self, n=None):
-        """Compare the full stored history of the n least recently verified tickers with Yahoo and refresh any that differ.
-        Returns DataFrame[ticker, result] with result 'match', 'repaired' or 'failed'."""
-        n = self.VERIFY_PER_RUN if n is None else n
+    def _verify(self, stored, n):
+        """Compare the full history of the n least recently verified tickers with Yahoo.
+        Returns (results, repairs): results is DataFrame[ticker, result] with 'match', 'repaired' or 'failed'; repairs are the downloads to apply."""
         man = pd.read_csv(self.manifest_file, dtype=str).set_index('ticker') if os.path.exists(self.manifest_file) else pd.DataFrame(columns=['outcome'])
         last = man['last_verified'].fillna('') if 'last_verified' in man.columns else pd.Series(dtype=str)
         # Tickers whose last scrape failed are already reported elsewhere and would only block the queue.
         eligible = [t for t in self.tickers if t in man.index and man.at[t, 'outcome'] in ('ok', 'no_new_data')]
-        results = []
+        results, repairs = [], []
         for ticker in sorted(eligible, key=lambda t: (last.get(t, ''), t))[:n]:
-            report = self.refresh_ticker(ticker)
-            if report is not None and report['differs']:
-                report = self.refresh_ticker(ticker, apply=True)
-                results.append((ticker, 'repaired' if report is not None else 'failed'))
+            report, fresh = self._compare(ticker, stored)
+            if report is None:
+                results.append((ticker, 'failed'))
+            elif report['differs']:
+                repairs.append(fresh)
+                results.append((ticker, 'repaired'))
             else:
-                results.append((ticker, 'match' if report is not None else 'failed'))
-        out = pd.DataFrame(results, columns=['ticker', 'result'])
-        print(f"Verified {len(out)} ticker(s) against Yahoo: {out['result'].value_counts().to_dict()}")
-        return out
+                results.append((ticker, 'match'))
+        return pd.DataFrame(results, columns=['ticker', 'result']), repairs
+
+    def verify_sample(self, n=None):
+        """Compare the full stored history of the n least recently verified tickers with Yahoo, repair any that differ
+        (one save for all of them), and return DataFrame[ticker, result]."""
+        stored = self._read_prices()
+        results, repairs = self._verify(stored, self.VERIFY_PER_RUN if n is None else n)
+        self._commit_repairs(stored, repairs)
+        self._mark_verified(results.loc[results['result'] != 'failed', 'ticker'].tolist())
+        print(f"Verified {len(results)} ticker(s) against Yahoo: {results['result'].value_counts().to_dict()}")
+        return results
 
     def _verdict(self, dollar_volume, price):
         """Pass/fail and reason for one measured ticker."""
@@ -242,32 +260,52 @@ class YF:
         self._write_csv_atomic(merged[cols].sort_values('ticker'), self.screen_file)
         return merged[merged['ticker'].isin(candidates['ticker'])][cols].sort_values('ticker').reset_index(drop=True)
 
-    def refresh_ticker(self, ticker, apply=False):
-        """Re-download one ticker's full history and overwrite its stored rows. Dry run unless apply=True.
-        Stored rows Yahoo no longer returns are kept, and nothing is touched if the download fails or is empty."""
-        ticker = ticker.strip().upper()
+    def _compare(self, ticker, stored):
+        """Download one ticker's full history and compare it with the stored rows. Returns (report, fresh rows), or (None, None) if the download failed."""
         cutoff_ts = pd.Timestamp.today().normalize() - pd.Timedelta(days=self.LAG_DAYS)
-        new, is_delisted = self._download_prices(ticker, start_date="2000-01-01", end_date=(cutoff_ts + pd.Timedelta(days=1)).strftime('%Y-%m-%d'))
-        if new.empty or is_delisted:
-            print(f"{ticker}: nothing changed ({self.last_outcome}).")
-            return None
-        existing = pd.read_csv(self.data_file)
-        old = existing[existing['ticker'] == ticker]
-        both = old.merge(new, on=['ticker', 'date'], how='outer', suffixes=('_old', '_new'), indicator=True)
+        fresh, is_delisted = self._download_prices(ticker, start_date="2000-01-01", end_date=(cutoff_ts + pd.Timedelta(days=1)).strftime('%Y-%m-%d'))
+        if fresh.empty or is_delisted:
+            return None, None
+        old = stored[stored['ticker'] == ticker]
+        both = old.merge(fresh, on=['ticker', 'date'], how='outer', suffixes=('_old', '_new'), indicator=True)
         same = both[both['_merge'] == 'both']
-        report = {'ticker': ticker, 'applied': apply, 'rows_stored': len(old), 'rows_downloaded': len(new),
+        report = {'ticker': ticker, 'rows_stored': len(old), 'rows_downloaded': len(fresh),
                   'only_stored (kept)': int((both['_merge'] == 'left_only').sum()), 'only_downloaded (added)': int((both['_merge'] == 'right_only').sum()),
                   'max_close_change': float((same['close_new'] / same['close_old'] - 1).abs().max()),
                   'max_adj_close_change': float((same['adj_close_new'] / same['adj_close_old'] - 1).abs().max())}
         report['differs'] = bool(report['only_downloaded (added)'] > 0 or report['max_close_change'] > self.ADJ_DRIFT_TOLERANCE
                                  or report['max_adj_close_change'] > self.ADJ_DRIFT_TOLERANCE)
+        return report, fresh
+
+    def _merge(self, stored, additions):
+        """Stored rows overlaid with new ones: a new row replaces a stored row for the same ticker and date; stored rows are never removed."""
+        if not additions:
+            return stored
+        merged = pd.concat([stored] + [a[self.COLUMNS] for a in additions], ignore_index=True)
+        return merged.drop_duplicates(subset=['ticker', 'date'], keep='last').sort_values(['ticker', 'date']).reset_index(drop=True)
+
+    def _commit_repairs(self, stored, repairs):
+        """Apply full-history repairs with one save, and record them in the manifest."""
+        if not repairs:
+            return
+        self._write_prices(self._merge(stored, repairs))
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self._save_manifest([(r['ticker'].iloc[0], r['date'].max(), now, 'ok', len(r)) for r in repairs])
+
+    def refresh_ticker(self, ticker, apply=False):
+        """Re-download one ticker's full history and compare it with what is stored. Only reports unless apply=True, which
+        overwrites its stored rows (never removing any). Nothing is touched if the download fails."""
+        ticker = ticker.strip().upper()
+        stored = self._read_prices()
+        report, fresh = self._compare(ticker, stored)
+        if report is None:
+            print(f"{ticker}: nothing changed ({self.last_outcome}).")
+            return None
+        report['applied'] = apply
         if apply:
-            merged = pd.concat([existing, new[existing.columns]], ignore_index=True)
-            merged = merged.drop_duplicates(subset=['ticker', 'date'], keep='last').sort_values(['ticker', 'date'])
-            self._write_prices(merged)
-            self._save_manifest([(ticker, new['date'].max(), datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'ok', len(new))])
+            self._commit_repairs(stored, [fresh])
         if apply or not report['differs']:
-            self._mark_verified(ticker)
+            self._mark_verified([ticker])
         print(report)
         return report
 
@@ -283,14 +321,10 @@ class YF:
 
     def daily_update(self, force_refresh_all=False):
         """Incremental update: each ticker re-fetches from OVERLAP_DAYS before its last stored date, up to today minus LAG_DAYS.
-        A ticker whose overlap rows no longer match Yahoo (dividend/split adjustment) gets a full refresh_ticker afterwards."""
-        existing_df = pd.read_csv(self.data_file) if os.path.exists(self.data_file) else pd.DataFrame()
-        if not existing_df.empty:
-            existing_df = existing_df.dropna(subset=['adj_close'])
-            existing_df['date'] = pd.to_datetime(existing_df['date']).dt.strftime('%Y-%m-%d')
-            latest_dates = existing_df.groupby('ticker')['date'].max().to_dict()
-        else:
-            latest_dates = {}
+        Then, in memory: a full refresh for any ticker whose overlap rows no longer match Yahoo (a dividend or split since the
+        last fetch), and the verification sample with its repairs. The price file is saved once, at the end."""
+        existing_df = self._read_prices()
+        latest_dates = existing_df.groupby('ticker')['date'].max().to_dict() if not existing_df.empty else {}
         if force_refresh_all:
             latest_dates = {}  # re-download every ticker from the start; stored rows are overwritten, never removed
 
@@ -329,32 +363,42 @@ class YF:
                 if last_date is not None and self._has_drifted(existing_df, ticker, ticker_df):
                     drifted.append(ticker)
 
-        if new_data_list:
-            final_df = pd.concat([existing_df] + new_data_list, ignore_index=True)
-            final_df = final_df.drop_duplicates(subset=['ticker', 'date'], keep='last').sort_values(['ticker', 'date'])
-            self._write_prices(final_df)
-            print(f"\nUpdate complete. Total rows: {len(final_df)}")
-        else:
-            print("No new data fetched.")
+        final_df = self._merge(existing_df, new_data_list)
+        print(f"\nFetched new rows for {len(new_data_list)} ticker(s)." if new_data_list else "No new data fetched.")
 
-        self._save_manifest(manifest_rows)
-
+        repairs = []
         for ticker in drifted[:self.MAX_REFRESH_PER_RUN]:
             print(f"  Adjustment drift detected for {ticker}: refreshing full history.")
-            self.refresh_ticker(ticker, apply=True)
+            report, fresh = self._compare(ticker, final_df)
+            if report is not None:
+                repairs.append(fresh)
         if len(drifted) > self.MAX_REFRESH_PER_RUN:
             print(f"  Drift pending for {len(drifted) - self.MAX_REFRESH_PER_RUN} more ticker(s): {drifted[self.MAX_REFRESH_PER_RUN:]}")
+        final_df = self._merge(final_df, repairs)
 
-        self.verify_sample()
+        self._save_manifest(manifest_rows)   # the verification sample reads it to choose who is due
+        results, verify_repairs = self._verify(final_df, self.VERIFY_PER_RUN)
+        final_df = self._merge(final_df, verify_repairs)
+        repaired = repairs + verify_repairs
+
+        if new_data_list or repaired:
+            self._write_prices(final_df)
+            print(f"Saved the price file once: {len(final_df)} rows.")
+        if repaired:
+            self._save_manifest([(r['ticker'].iloc[0], r['date'].max(), now, 'ok', len(r)) for r in repaired])
+        self._mark_verified([r['ticker'].iloc[0] for r in repairs] + results.loc[results['result'] != 'failed', 'ticker'].tolist())
+        print(f"Verified {len(results)} ticker(s) against Yahoo: {results['result'].value_counts().to_dict()}")
 
         if confirmed_delisted:
             self._flag_delisted(confirmed_delisted)
             self.tickers = self._load_tickers()
 
     def clean_database(self):
-        """Purge rows with missing prices and duplicates. DELISTED tickers' history is kept (they are only excluded from fetching)."""
-        if not os.path.exists(self.data_file): return
-        df = pd.read_csv(self.data_file)
+        """Purge rows with missing prices and duplicates. The one deliberate exception to the rule that rows are never removed.
+        DELISTED tickers' history is kept (they are only excluded from fetching)."""
+        if not os.path.exists(self.data_file):
+            return
+        df = self._read_prices()
         initial = len(df)
 
         for col in ['close', 'adj_close', 'open', 'high', 'low']:
@@ -362,6 +406,7 @@ class YF:
         df = df.dropna(subset=['close', 'adj_close', 'open', 'high', 'low'])
 
         df = df.drop_duplicates(subset=['ticker', 'date'])
-        self._write_csv_atomic(df, self.data_file)
+        tmp_path = self.data_file + '.tmp'
+        df[self.COLUMNS].to_parquet(tmp_path, index=False)
+        os.replace(tmp_path, self.data_file)
         print(f"Clean complete. Removed {initial - len(df)} rows.")
-

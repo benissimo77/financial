@@ -27,8 +27,8 @@ t['NOVOL'].loc[t['NOVOL'].index[-60:], 'volume'] = 0.0                     # 60 
 flat = t['FLAT'].index[-40:]                                                # the price does not move for 40 days, with volume
 t['FLAT'].loc[flat, ['open', 'close', 'adj_close']] = 70.0; t['FLAT'].loc[flat, 'high'] = 71.0; t['FLAT'].loc[flat, 'low'] = 69.0
 t['ADJ'].loc[200:, ['open', 'high', 'low', 'close']] *= 2                  # raw prices double overnight, the adjusted price does not
-P, M, W, R = (os.path.join(T, f) for f in ('prices.csv', 'manifest.csv', 'watch.csv', 'registry.csv'))
-pd.concat(t.values()).to_csv(P, index=False)
+P, M, W, R = (os.path.join(T, f) for f in ('prices.parquet', 'manifest.csv', 'watch.csv', 'registry.csv'))
+pd.concat(t.values()).to_parquet(P, index=False)
 watch = [k for k in t if k != 'OFFLIST'] + ['MISSING']
 pd.DataFrame({'ticker': watch}).to_csv(W, index=False)
 pd.DataFrame({'ticker': watch, 'last_date': '2026-09-30', 'last_attempt': '2026-10-07 09:00:00', 'outcome': ['ok'] * (len(watch) - 1) + ['transient_error'], 'rows_fetched': 1}).to_csv(M, index=False)

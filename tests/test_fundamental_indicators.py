@@ -52,9 +52,9 @@ pd.DataFrame({'ticker': watch, 'outcome': 'ok'}).to_csv(T + '/EDGAR/edgar-manife
 days = pd.bdate_range(recent[0] - pd.Timedelta(days=5), today)
 px = pd.DataFrame([(t, d.strftime('%Y-%m-%d'), 20.0, 20.0, 20.0, 20.0, 1000.0, 18.0) for t in watch if t != 'NOREV' for d in days],
                   columns=['ticker', 'date', 'open', 'high', 'low', 'close', 'volume', 'adj_close'])
-px.to_csv(T + '/prices.csv', index=False)
+px.to_parquet(T + '/prices.parquet', index=False)
 fd = FundamentalData(data_dir=T + '/EDGAR', health=EdgarHealth(data_dir=T + '/EDGAR', tickers_file=T + '/watch.csv', registry_file=T + '/none.csv'), include_red=True)
-ind = FundamentalIndicators(fd, PriceData(T + '/prices.csv', tickers_file=None))
+ind = FundamentalIndicators(fd, PriceData(T + '/prices.parquet', tickers_file=None))
 last = lambda table, t: table[t].dropna().iloc[-1]
 
 om = ind.operating_margin()

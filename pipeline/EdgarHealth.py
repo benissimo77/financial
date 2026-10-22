@@ -190,7 +190,7 @@ class EdgarHealth:
             filled = (100 * tb[self.CORE].notna().mean(axis=1)).groupby((tb['period_end'] - shift).dt.to_period('Q')).max()
             filled = filled[filled.index.isin(quarters)]
             grid.loc[ticker, filled.index] = filled.values
-        label = (s['basis'].map({'quarterly': '', 'annual': ' (annual)'}) + ' ' + s['industry']).values
+        label = (s['basis'].map({'quarterly': '', 'annual': ' (annual)'}) + ' ' + s['industry']).to_numpy(dtype=object)
         fig = go.Figure(go.Heatmap(
             z=grid.values, x=[str(c) for c in quarters], y=list(s.index), zmin=0, zmax=100, colorscale='RdYlGn', hoverongaps=False,
             customdata=np.repeat(label[:, None], len(quarters), axis=1), showscale=False,

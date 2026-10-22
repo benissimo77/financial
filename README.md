@@ -4,7 +4,7 @@ A personal workspace for researching listed companies. It keeps a local database
 
 ## What it holds
 
-- **Prices:** daily prices from Yahoo Finance, from 2000 where available, adjusted for dividends and splits.
+- **Prices:** daily prices from Yahoo Finance, from 2000 where available, adjusted for dividends and splits, stored in one compact Parquet file.
 - **Company accounts:** quarterly and annual figures (revenue, profit, cash flow, balance sheet, share count) from the SEC's EDGAR service, with the date each figure was first published.
 - **Which companies:** a watchlist built from rules in `pipeline/watchlist-rules.csv`: whole industries, individual tickers, and named groups such as `holdings`. Candidates must pass a liquidity screen.
 
@@ -42,7 +42,7 @@ Every calculation returns a table with dates down the side and companies across,
 
 ## Requirements
 
-Python 3.14 with pandas, numpy, yfinance, plotly, scipy, statsmodels, requests and ipykernel. Fetching SEC data requires a contact email in the request header, set in `pipeline/Edgar.py`.
+Python 3.14 with pandas, numpy, pyarrow, yfinance, plotly, scipy, statsmodels, requests and ipykernel. Fetching SEC data requires a contact email in the request header, set in `pipeline/Edgar.py`.
 
 ## Rebuilding the data
 

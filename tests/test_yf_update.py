@@ -6,13 +6,13 @@ os.chdir(ROOT); sys.path.insert(0, ROOT)
 import sys, os, io, contextlib, shutil, hashlib, warnings; warnings.filterwarnings('ignore'); sys.path.insert(0, '.')
 import pandas as pd
 from pipeline.YF import YF
-real = hashlib.md5(open('data/prices/yf-prices.csv', 'rb').read()).hexdigest(); real_reg = hashlib.md5(open('data/registry/tickers.csv', 'rb').read()).hexdigest()
+real = hashlib.md5(open('data/prices/yf-prices.parquet', 'rb').read()).hexdigest(); real_reg = hashlib.md5(open('data/registry/tickers.csv', 'rb').read()).hexdigest()
 T = tempfile.mkdtemp() + '/tmpdata'; shutil.rmtree(T, ignore_errors=True); os.makedirs(T)
-P, M, W, R = T + '/prices.csv', T + '/manifest.csv', T + '/watch.csv', T + '/reg.csv'
+P, M, W, R = T + '/prices.parquet', T + '/manifest.csv', T + '/watch.csv', T + '/reg.csv'
 cols = ['ticker', 'date', 'open', 'high', 'low', 'close', 'volume', 'adj_close']
 def rows(t, dates, px=10.0): return pd.DataFrame([[t, d, px, px, px, px, 100.0, px] for d in dates], columns=cols)
 old_dates = [d.strftime('%Y-%m-%d') for d in pd.bdate_range('2026-08-03', '2026-08-28')]
-pd.concat([rows('AAA', old_dates), rows('DEAD', old_dates), rows('ORPH', old_dates)]).to_csv(P, index=False)
+pd.concat([rows('AAA', old_dates), rows('DEAD', old_dates), rows('ORPH', old_dates)]).to_parquet(P, index=False)
 pd.DataFrame({'ticker': ['AAA', 'DEAD']}).to_csv(W, index=False)
 pd.DataFrame({'ticker': ['AAA', 'DEAD', 'ORPH'], 'status': ['HEALTHY'] * 3, 'last_update': ['2026-01-01'] * 3}).to_csv(R, index=False)
 calls = []
@@ -35,7 +35,7 @@ ok('A2 second result on the same day does not flag', status()['DEAD'] == 'HEALTH
 m = pd.read_csv(M, dtype=str); m.loc[m.ticker == 'DEAD', 'last_attempt'] = '2026-10-01 09:00:00'; m.to_csv(M, index=False)
 with quiet: y = mk(); y.daily_update()
 ok('A2 second result on a later day flags DELISTED', status()['DEAD'] == 'DELISTED' and 'DEAD' not in y.tickers)
-df = pd.read_csv(P); n = df.ticker.value_counts()
+df = pd.read_parquet(P); n = df.ticker.value_counts()
 ok('update added rows for AAA, kept DEAD and ORPH history', n['AAA'] > 20 and n['DEAD'] == 20 and n['ORPH'] == 20)
 
 h = hashlib.md5(open(P, 'rb').read()).hexdigest()
@@ -49,8 +49,8 @@ print('     message:', msg)
 
 calls.clear()
 with quiet: mk().daily_update(force_refresh_all=True)
-df2 = pd.read_csv(P); n2 = df2.ticker.value_counts()
+df2 = pd.read_parquet(P); n2 = df2.ticker.value_counts()
 ok('A5 force refresh re-downloads from 2000', ('AAA', '2000-01-01') in calls)
 ok('A5 force refresh keeps tickers outside the watchlist', n2.get('ORPH', 0) == 20 and n2.get('DEAD', 0) == 20)
 ok('A5 force refresh overwrote AAA with fresh values', (df2[df2.ticker == 'AAA']['close'] == 11.0).all() and not df2.duplicated(['ticker', 'date']).any())
-ok('real data files untouched', real == hashlib.md5(open('data/prices/yf-prices.csv', 'rb').read()).hexdigest() and real_reg == hashlib.md5(open('data/registry/tickers.csv', 'rb').read()).hexdigest())
+ok('real data files untouched', real == hashlib.md5(open('data/prices/yf-prices.parquet', 'rb').read()).hexdigest() and real_reg == hashlib.md5(open('data/registry/tickers.csv', 'rb').read()).hexdigest())
