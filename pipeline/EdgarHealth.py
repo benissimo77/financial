@@ -92,7 +92,7 @@ class EdgarHealth:
             reg = pd.read_csv(self.registry_file, dtype=str).dropna(subset=['ticker'])
             reg['key'] = reg['ticker'].str.upper().str.replace('.', '-', regex=False)
             reg = reg.drop_duplicates('key').set_index('key')
-            out['sector'], out['industry'] = reg['sector'], reg['zacks_x_ind_desc']
+            out['sector'], out['industry'] = reg['sector'], reg['industry']
         return out
 
     def score(self, metrics=None, as_of=None):
@@ -103,7 +103,7 @@ class EdgarHealth:
                    + np.minimum((100 - m['core_pct']) * w['coverage_per_pct'], w['coverage_cap'])
                    + np.minimum(m['missing_periods'] * w['gap_per_period'], w['gap_cap'])
                    + w['negative_revenue'] * (m['negative_revenue'] > 0) + w['revenue_jump'] * (m['revenue_jumps'] > 0))
-        applicable = m['last_outcome'] != 'no_facts'
+        applicable = ~m['last_outcome'].isin(['no_facts', 'no_cik'])   # funds (SPY) and companies the SEC holds nothing for
         m['score'] = (100 - penalty).clip(lower=0).where(m['basis'] != 'none', 0).where(applicable)
         m['band'] = np.select([~applicable, m['score'] >= self.BANDS[0], m['score'] >= self.BANDS[1]], ['n/a', 'green', 'amber'], 'red')
         m['issues'] = m.apply(self._issues, axis=1)

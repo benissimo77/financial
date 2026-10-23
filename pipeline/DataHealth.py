@@ -84,7 +84,7 @@ class DataHealth:
             reg = pd.read_csv(self.registry_file, dtype=str).dropna(subset=['ticker'])
             reg['key'] = reg['ticker'].str.upper().str.replace('.', '-', regex=False)
             reg = reg.drop_duplicates('key').set_index('key')
-            out['sector'], out['industry'] = reg['sector'], reg['zacks_x_ind_desc']
+            out['sector'], out['industry'] = reg['sector'], reg['industry']
         out.index.name = 'ticker'
         return out
 

@@ -1,12 +1,11 @@
 action,level,value,list
-# include works at sector, industry or ticker level; exclude only at ticker level.
-# Run the "Build the Watchlist from Rules" cell in yfinance-Scraper.ipynb to regenerate watchlist.csv.
+# include works at sector, industry, ticker or sample level; exclude only at ticker level.
+# Sectors are the Fama-French 12 groups and industries the SEC's names, as in data/registry/tickers.csv.
+# Run section 1 of Data Update.ipynb to regenerate data/watchlist.csv. The benchmark (SPY) is always added.
 # The optional fourth column names a sub-list. A ticker can be in several lists: give it one line per list.
 # Use a list with Watchlist().members('holdings'); see them all with Watchlist().lists().
-include,industry,Information Technology Services
-include,industry,Semiconductors
-include,industry,Computer Software
-include,ticker,SPY
+# A broad, unbiased universe: 2,500 companies drawn at random, each sector in proportion to its size (about 1,200 pass the liquidity screen).
+include,sample,2500,broad
 # Stocks actually held (DeGiro), so analysis can be run on the real portfolio.
 include,ticker,AAPL,holdings
 include,ticker,AMZN,holdings

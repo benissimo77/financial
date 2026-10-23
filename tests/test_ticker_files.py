@@ -30,6 +30,7 @@ ok('the safe name can be created and listed', os.path.exists(os.path.join(T, '_C
 # Round trip: the fetcher stores CON, the manifest says CON, the builder reads it back as CON.
 D = os.path.join(T, 'edgar'); W = os.path.join(T, 'watch.csv')
 pd.DataFrame({'ticker': ['CON', 'AAA']}).to_csv(W, index=False)
+REGF = os.path.join(T, 'registry.csv'); pd.DataFrame({'ticker': ['CON', 'AAA'], 'cik': [1, 2]}).to_csv(REGF, index=False)
 facts = {'cik': 1, 'facts': {'us-gaap': {'Revenues': {'units': {'USD': [
     {'start': '2025-01-01', 'end': '2025-03-31', 'val': 100, 'filed': '2025-05-01', 'form': '10-Q'},
     {'start': '2025-04-01', 'end': '2025-06-30', 'val': 110, 'filed': '2025-08-01', 'form': '10-Q'}]}}}}}
@@ -42,12 +43,10 @@ class Resp:
 
 
 def fake_get(self, url):
-    if url == Edgar.TICKERS_URL:
-        return Resp(200, json.dumps({'0': {'cik_str': 1, 'ticker': 'CON', 'title': 'Con Co'}, '1': {'cik_str': 2, 'ticker': 'AAA', 'title': 'A Co'}}).encode())
     return Resp(200, json.dumps(facts).encode())
 Edgar._get = fake_get
 with contextlib.redirect_stdout(io.StringIO()):
-    Edgar(tickers_file=W, data_dir=D).update()
+    Edgar(tickers_file=W, data_dir=D, registry_file=REGF).update()
 raw = sorted(os.listdir(os.path.join(D, 'raw')))
 manifest = pd.read_csv(os.path.join(D, 'edgar-manifest.csv'))
 ok('the fetcher writes _CON.json, and the manifest records CON', raw == ['AAA.json', '_CON.json'] and set(manifest['ticker']) == {'AAA', 'CON'})

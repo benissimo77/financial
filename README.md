@@ -6,7 +6,7 @@ A personal workspace for researching listed companies. It keeps a local database
 
 - **Prices:** daily prices from Yahoo Finance, from 2000 where available, adjusted for dividends and splits, stored in one compact Parquet file.
 - **Company accounts:** quarterly and annual figures (revenue, profit, cash flow, balance sheet, share count) from the SEC's EDGAR service, with the date each figure was first published.
-- **Which companies:** a watchlist built from rules in `pipeline/watchlist-rules.csv`: whole industries, individual tickers, and named groups such as `holdings`. Candidates must pass a liquidity screen.
+- **Which companies:** a registry of every operating company with common shares on NYSE or Nasdaq, from SEC data, grouped by SEC industry and Fama-French sector. The watchlist is built from it by rules in `pipeline/watchlist-rules.csv`: whole sectors or industries, individual tickers, random samples, and named groups such as `holdings`. Candidates must pass a liquidity screen.
 
 ## Layout
 
@@ -46,7 +46,7 @@ Python 3.14 with pandas, numpy, pyarrow, yfinance, plotly, scipy, statsmodels, r
 
 ## Rebuilding the data
 
-`data/` is not in git. Running `pipeline/Data Update.ipynb` re-downloads full price histories (a few minutes per hundred companies) and SEC filings (about 2.5 MB per company). The one exception is `data/registry/tickers.csv`, the list of companies with their sector, industry and status, which cannot be downloaded again and is therefore kept in git.
+`data/` is not in git. Running `pipeline/Data Update.ipynb` re-downloads full price histories (a few minutes per hundred companies) and SEC filings (about 2.5 MB per company). The exception is `data/registry/`: the list of companies with their sector and industry, built from SEC data. It can be rebuilt (`pipeline/Registry.py`), but that takes about an hour, so it is kept in git.
 
 ## Tests
 

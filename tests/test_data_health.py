@@ -32,7 +32,7 @@ pd.concat(t.values()).to_parquet(P, index=False)
 watch = [k for k in t if k != 'OFFLIST'] + ['MISSING']
 pd.DataFrame({'ticker': watch}).to_csv(W, index=False)
 pd.DataFrame({'ticker': watch, 'last_date': '2026-09-30', 'last_attempt': '2026-10-07 09:00:00', 'outcome': ['ok'] * (len(watch) - 1) + ['transient_error'], 'rows_fetched': 1}).to_csv(M, index=False)
-pd.DataFrame({'ticker': watch, 'sector': 'Tech', 'zacks_x_ind_desc': ['Software'] * 5 + ['Chips'] * (len(watch) - 5)}).to_csv(R, index=False)
+pd.DataFrame({'ticker': watch, 'sector': 'Tech', 'industry': ['Software'] * 5 + ['Chips'] * (len(watch) - 5)}).to_csv(R, index=False)
 digest = lambda: [hashlib.md5(open(f, 'rb').read()).hexdigest() for f in (P, M, W, R)]
 before = digest()
 

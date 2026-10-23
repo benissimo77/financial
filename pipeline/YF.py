@@ -30,11 +30,6 @@ class YF:
         self.tickers = self._load_tickers()
 
     @staticmethod
-    def _mt_symbol(ticker):
-        # MacroTrends uses '.' for share classes (BRK.B) where yfinance uses '-' (BRK-B).
-        return str(ticker).strip().upper().replace('-', '.')
-
-    @staticmethod
     def _write_csv_atomic(df, path):
         # Write to a temp file, then rename, so a crash mid-write cannot corrupt the existing file.
         tmp_path = path + '.tmp'
@@ -70,11 +65,11 @@ class YF:
 
         # DELISTED is the single exclusion gate for YF — set here when yfinance confirms a delisting.
         if os.path.exists(self.registry_file):
-            mt_df = pd.read_csv(self.registry_file, dtype={'status': str})
-            delisted = set(mt_df.loc[mt_df['status'] == 'DELISTED', 'ticker'].astype(str).str.strip().str.upper())
+            reg = pd.read_csv(self.registry_file, dtype={'status': str})
+            delisted = set(reg.loc[reg['status'] == 'DELISTED', 'ticker'].astype(str).str.strip().str.upper())
             if delisted:
                 before = len(tickers)
-                tickers = [t for t in tickers if self._mt_symbol(t) not in delisted]
+                tickers = [t for t in tickers if t not in delisted]
                 if len(tickers) < before:
                     print(f"Filtered out {before - len(tickers)} DELISTED tickers.")
 
@@ -88,17 +83,15 @@ class YF:
         print(f"Confirmed delisted (per yfinance): {tickers}")
 
         if os.path.exists(self.registry_file):
-            mt_df = pd.read_csv(self.registry_file, dtype={'status': str})
-            mt_symbols = {self._mt_symbol(t) for t in tickers}
-            mask = mt_df['ticker'].astype(str).str.strip().str.upper().isin(mt_symbols)
+            reg = pd.read_csv(self.registry_file, dtype=str)
+            mask = reg['ticker'].astype(str).str.strip().str.upper().isin(tickers)
             if mask.any():
-                mt_df.loc[mask, 'status'] = 'DELISTED'
-                # StringDtype columns reject datetime objects; write as string explicitly.
-                mt_df.loc[mask, 'last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-                self._write_csv_atomic(mt_df, self.registry_file)
+                reg.loc[mask, 'status'] = 'DELISTED'
+                reg.loc[mask, 'last_update'] = datetime.now().strftime('%Y-%m-%d')
+                self._write_csv_atomic(reg, self.registry_file)
                 print(f"Updated status=DELISTED for {mask.sum()} ticker(s) in {self.registry_file}.")
 
-            not_found = [t for t in tickers if self._mt_symbol(t) not in set(mt_df['ticker'].astype(str).str.strip().str.upper())]
+            not_found = [t for t in tickers if t not in set(reg['ticker'].astype(str).str.strip().str.upper())]
             if not_found:
                 print(f"  [WARN] Not in the ticker registry — DELISTED status cannot be persisted: {not_found}")
 

@@ -41,7 +41,7 @@ quarterly.to_csv(T + '/EDGAR/edgar-quarterly.csv', index=False, date_format='%Y-
 names = ['GOOD', 'LATE', 'HOLE', 'MIS', 'NEG', 'JUMP', 'FRGN', 'ETF', 'LOST']
 pd.DataFrame({'ticker': names}).to_csv(T + '/watch.csv', index=False)
 pd.DataFrame({'ticker': names, 'outcome': ['ok'] * 7 + ['no_facts', 'ok']}).to_csv(T + '/EDGAR/edgar-manifest.csv', index=False)
-pd.DataFrame({'ticker': names, 'sector': 'Tech', 'zacks_x_ind_desc': 'Software'}).to_csv(T + '/reg.csv', index=False)
+pd.DataFrame({'ticker': names, 'sector': 'Tech', 'industry': 'Software'}).to_csv(T + '/reg.csv', index=False)
 digest = lambda: [hashlib.md5(open(f'{T}/EDGAR/{f}', 'rb').read()).hexdigest() for f in sorted(os.listdir(T + '/EDGAR'))]
 before = digest()
 

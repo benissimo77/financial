@@ -1,6 +1,6 @@
 # Downloaded and generated data: rebuilt by pipeline/Data Update.ipynb.
 data/*
-# Except the ticker registry, which cannot be downloaded again (see README).
+# Except the ticker registry, which takes an hour to rebuild from the SEC (see README).
 !data/registry/
 
 # Python and Jupyter

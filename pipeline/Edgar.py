@@ -12,17 +12,15 @@ class Edgar:
     USER_AGENT = 'financial-research ben.silburn@gmail.com'  # SEC requires a contact address on every request
     REQUEST_GAP = 0.25      # seconds between requests; SEC allows 10 per second
     REFETCH_DAYS = 7        # a ticker with a settled answer (ok or no_facts) within this many days is skipped
-    TICKER_LIST_DAYS = 30   # refresh SEC's ticker-to-CIK list when older than this
     MIN_SIZE_RATIO = 0.5    # refuse a download smaller than this share of the stored file
-    TICKERS_URL = 'https://www.sec.gov/files/company_tickers.json'
     FACTS_URL = 'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json'
     MANIFEST_COLUMNS = ['ticker', 'cik', 'last_attempt', 'outcome', 'last_filed', 'size_kb']
 
-    def __init__(self, tickers_file='data/watchlist.csv', data_dir='data/edgar'):
+    def __init__(self, tickers_file='data/watchlist.csv', data_dir='data/edgar', registry_file='data/registry/tickers.csv'):
         self.tickers_file = tickers_file
         self.raw_dir = os.path.join(data_dir, 'raw')
         self.manifest_file = os.path.join(data_dir, 'edgar-manifest.csv')
-        self.cik_file = os.path.join(data_dir, 'edgar-tickers.csv')
+        self.registry_file = registry_file   # source of company IDs
         os.makedirs(self.raw_dir, exist_ok=True)
 
     @staticmethod
@@ -45,16 +43,11 @@ class Edgar:
         return path_for(self.raw_dir, ticker, '.json')
 
     def cik_map(self):
-        """Series of CIK by ticker, from SEC's list. SEC uses '-' for share classes (BRK-B), the same as yfinance."""
-        stale = not os.path.exists(self.cik_file) or (time.time() - os.path.getmtime(self.cik_file)) > self.TICKER_LIST_DAYS * 86400
-        if stale:
-            r = self._get(self.TICKERS_URL)
-            r.raise_for_status()
-            listing = pd.DataFrame(r.json().values()).rename(columns={'cik_str': 'cik', 'title': 'name'})
-            listing['ticker'] = listing['ticker'].str.upper()
-            self._write_atomic(self.cik_file, listing[['ticker', 'cik', 'name']].to_csv(index=False).encode('utf-8'))
-        listing = pd.read_csv(self.cik_file)
-        return listing.drop_duplicates('ticker').set_index('ticker')['cik']
+        """Series of SEC company ID (CIK) by ticker, from the registry (which is built from the SEC's own lists)."""
+        if not os.path.exists(self.registry_file):
+            raise FileNotFoundError(f"{self.registry_file} not found: build the registry first (pipeline/Registry.py).")
+        reg = pd.read_csv(self.registry_file, dtype={'ticker': str})
+        return reg.drop_duplicates('ticker').set_index('ticker')['cik']
 
     def _fetch(self, ticker, cik):
         """Download one company's facts. Returns (outcome, last_filed); the stored file is only replaced by a sound download."""

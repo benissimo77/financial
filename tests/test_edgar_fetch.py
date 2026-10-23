@@ -8,6 +8,7 @@ import pandas as pd, requests
 from pipeline.Edgar import Edgar
 T = tempfile.mkdtemp() + '/tmpedgar'; shutil.rmtree(T, ignore_errors=True); os.makedirs(T)
 W = T + '/watch.csv'; pd.DataFrame({'ticker': ['GOOD', 'ETF', 'DOWN', 'JUNK', 'NOCIK']}).to_csv(W, index=False)
+R = T + '/registry.csv'; pd.DataFrame({'ticker': ['GOOD', 'ETF', 'DOWN', 'JUNK'], 'cik': [1, 2, 3, 4]}).to_csv(R, index=False)   # NOCIK is not in the registry
 
 
 class Resp:
@@ -26,15 +27,13 @@ calls = []
 mode = {'GOOD': Resp(200, facts(200))}
 def fake_get(self, url):
     calls.append(url)
-    if url == Edgar.TICKERS_URL:
-        return Resp(200, json.dumps({str(i): {'cik_str': i + 1, 'ticker': t, 'title': t} for i, t in enumerate(['GOOD', 'ETF', 'DOWN', 'JUNK'])}).encode())
     cik = int(url.split('CIK')[1][:10])
     if cik == 1: return mode['GOOD']
     if cik == 2: return Resp(404)
     if cik == 3: raise requests.ConnectionError('network down')
     return Resp(200, b'<html>not json</html>')
 Edgar._get = fake_get
-mk = lambda: Edgar(tickers_file=W, data_dir=T + '/EDGAR')
+mk = lambda: Edgar(tickers_file=W, data_dir=T + '/EDGAR', registry_file=R)
 ok = lambda name, cond: print(('PASS' if cond else 'FAIL'), name)
 quiet = lambda: contextlib.redirect_stdout(io.StringIO())
 man = lambda: pd.read_csv(T + '/EDGAR/edgar-manifest.csv', dtype=str).set_index('ticker')
@@ -49,7 +48,7 @@ ok('no temp files left behind', not [f for d, _, fs in os.walk(T) for f in fs if
 calls.clear()
 with quiet(): r2 = mk().update()
 ok('recent ok and no_facts are skipped, failures are retried', sorted(r2['ticker']) == ['DOWN', 'JUNK', 'NOCIK'] and not any('CIK0000000001' in c for c in calls))
-ok('ticker list is cached, not re-downloaded', Edgar.TICKERS_URL not in calls)
+ok('company IDs come from the registry: only company records are requested', all('CIK' in c for c in calls))
 ok('skipped ticker keeps its manifest row', man().at['GOOD', 'outcome'] == 'ok' and len(man()) == 5)
 
 before = open(T + '/EDGAR/raw/GOOD.json', 'rb').read()

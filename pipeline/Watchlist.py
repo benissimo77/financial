@@ -7,11 +7,12 @@ import pandas as pd
 
 
 class Watchlist:
-    UNUSABLE_STATUSES = {'DELISTED', 'INVALID'}
+    UNUSABLE_STATUSES = {'DELISTED'}   # confirmed dead at Yahoo
     # include works at any level; exclude is ticker-only by design.
     ALLOWED = {('include', 'sector'), ('include', 'industry'), ('include', 'ticker'), ('include', 'sample'), ('exclude', 'ticker')}
     SAMPLE_SEED = 2026   # fixed, so a sample rule always draws the same companies
-    COLUMN = {'sector': 'sector', 'industry': 'zacks_x_ind_desc', 'ticker': 'symbol'}
+    BENCHMARKS = ['SPY']   # funds, not companies: always on the watchlist (for comparison), never in the registry
+    COLUMN = {'sector': 'sector', 'industry': 'industry', 'ticker': 'symbol'}
 
     def __init__(self, rules_file="pipeline/watchlist-rules.csv", registry_file="data/registry/tickers.csv", tickers_file="data/watchlist.csv"):
         self.rules_file = rules_file
@@ -62,13 +63,16 @@ class Watchlist:
             hits = usable[usable[self.COLUMN[level]] == value]
             picked.append(pd.DataFrame({'ticker': hits['symbol'], 'matched_by': f"{level}:{raw}", 'list': name}))
 
-        out = pd.concat(picked, ignore_index=True) if picked else pd.DataFrame(columns=['ticker', 'matched_by', 'list'])
+        picked.append(pd.DataFrame({'ticker': self.BENCHMARKS, 'matched_by': 'benchmark', 'list': ''}))
+        out = pd.concat(picked, ignore_index=True)
         drop = {self._yf_symbol(v) for v in rules.loc[rules['action'] == 'exclude', 'value']}
         return out[~out['ticker'].isin(drop)]
 
     def _sample(self, usable, n):
-        """n companies drawn at random, each sector getting its proportional share (largest remainders get the leftover places)."""
-        pool = usable.assign(sector=usable['sector'].fillna('Unclassified')).sort_values('symbol').drop_duplicates('symbol')
+        """n companies drawn at random, each sector getting its proportional share (largest remainders get the leftover places).
+        One ticker per company: its plain ticker if it has one (GOOG over GOOG-B), otherwise the first alphabetically."""
+        pool = usable.assign(sector=usable['sector'].fillna('Unclassified'), share_class=usable['symbol'].str.contains('-'))
+        pool = pool.sort_values(['share_class', 'symbol']).drop_duplicates('cik' if 'cik' in pool.columns else 'symbol').sort_values('symbol')
         n = min(n, len(pool))
         sizes = pool['sector'].value_counts().sort_index()
         exact = sizes / sizes.sum() * n
